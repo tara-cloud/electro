@@ -1,0 +1,46 @@
+// Prisma schema for Electro device management server
+// Run: node migrate.js
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Device {
+  id              String    @id @default(cuid())
+  deviceId        String    @unique
+  deviceName      String
+  deviceType      String
+  firmwareVersion String
+  lastSeen        DateTime  @default(now())
+  createdAt       DateTime  @default(now())
+
+  configs   DeviceConfig[]
+  readings  SensorReading[]
+}
+
+model DeviceConfig {
+  id        String   @id @default(cuid())
+  device    Device   @relation(fields: [deviceId], references: [deviceId])
+  deviceId  String
+  version   String
+  config    Json
+  createdAt DateTime @default(now())
+
+  @@unique([deviceId, version])
+}
+
+model SensorReading {
+  id          String   @id @default(cuid())
+  device      Device   @relation(fields: [deviceId], references: [deviceId])
+  deviceId    String
+  temperature Float?
+  humidity    Float?
+  light       Int?
+  extra       Json?
+  recordedAt  DateTime @default(now())
+}

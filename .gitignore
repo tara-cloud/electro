@@ -1,0 +1,14 @@
+# Node
+server/node_modules/
+server/dist/
+
+# Prisma
+server/prisma/migrations/
+
+# PlatformIO
+firmware/.pio/
+
+# Env
+.env
+.env.*
+!.env.example

@@ -7,6 +7,7 @@ import { configRoutes } from './routes/config';
 import { sensorRoutes } from './routes/sensor';
 import { robotRoutes }    from './routes/robot';
 import { hardwareRoutes } from './routes/hardware';
+import { faceRoutes, seedFaces } from './routes/face';
 import { initMqtt } from './mqtt';
 
 const app = Fastify({ logger: true });
@@ -24,10 +25,12 @@ app.register(configRoutes, { prefix: '/device' });
 app.register(sensorRoutes, { prefix: '/device' });
 app.register(robotRoutes,    { prefix: '/robot' });
 app.register(hardwareRoutes, { prefix: '/robot' });
+app.register(faceRoutes,     { prefix: '/faces' });
 
 app.get('/health', async () => ({ status: 'ok' }));
 
 initMqtt();
+seedFaces();
 
 const port = parseInt(process.env.PORT ?? '4000');
 const host = process.env.HOST ?? '0.0.0.0';

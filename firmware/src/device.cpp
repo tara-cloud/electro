@@ -1,5 +1,10 @@
 // Tara Robot — device logic
 // Display: SH1106 128x64 via U8g2 SW_I2C (SDA=21, SCL=22)
+//
+// Faces are runtime JSON received via MQTT — no hardcoded graphics.
+// Command format (sent on tara/robot/{id}/display):
+//   { "cmds": [ {"t":"disc","x":38,"y":26,"r":9}, {"t":"hline","x":52,"y":46,"w":24}, ... ] }
+// Supported types: disc, circle, hline, vline, pixel, rbox, rect, text, clear
 
 #include "TaraCore.h"
 #include <ArduinoJson.h>
@@ -17,114 +22,64 @@ static int  displayBrightness = 128;
 static int  volume            = 70;
 static int  idleTimeout       = 300;
 
-// ─── Emotion engine ───────────────────────────────────────────────────────────
-struct EmotionState {
-    String state  = "idle";
-    int    energy = 50;
-    unsigned long since = 0;
-};
+// ─── Emotion state ────────────────────────────────────────────────────────────
+struct EmotionState { String state = "idle"; int energy = 50; unsigned long since = 0; };
 static EmotionState emotion;
 
-// ─── Draw helpers ─────────────────────────────────────────────────────────────
+// ─── Cached face JSON per state (loaded from server at boot via config) ────────
+// Keys match RobotState names; stored as compact JSON strings
+static String cachedFaces[10]; // indexed by RobotState enum
 
-static void drawEyes(int lx, int ly, int rx, int ry, int r, bool blink = false) {
-    if (blink) {
-        u8g2.drawHLine(lx - r, ly, r * 2);
-        u8g2.drawHLine(rx - r, ry, r * 2);
+static const char* STATE_NAMES[] = {
+    "booting", "connecting", "registering", "configuring",
+    "idle", "listening", "thinking", "speaking", "sleeping", "error"
+};
+
+// ─── JSON draw engine ─────────────────────────────────────────────────────────
+
+static void execCmd(const JsonObject& cmd) {
+    const char* t = cmd["t"] | "";
+
+    if      (strcmp(t, "disc")   == 0) u8g2.drawDisc  (cmd["x"], cmd["y"], cmd["r"]);
+    else if (strcmp(t, "circle") == 0) u8g2.drawCircle(cmd["x"], cmd["y"], cmd["r"]);
+    else if (strcmp(t, "hline")  == 0) u8g2.drawHLine (cmd["x"], cmd["y"], cmd["w"]);
+    else if (strcmp(t, "vline")  == 0) u8g2.drawVLine (cmd["x"], cmd["y"], cmd["h"]);
+    else if (strcmp(t, "pixel")  == 0) u8g2.drawPixel (cmd["x"], cmd["y"]);
+    else if (strcmp(t, "rbox")   == 0) u8g2.drawRBox  (cmd["x"], cmd["y"], cmd["w"], cmd["h"], cmd["r"] | 0);
+    else if (strcmp(t, "rect")   == 0) u8g2.drawFrame (cmd["x"], cmd["y"], cmd["w"], cmd["h"]);
+    else if (strcmp(t, "text")   == 0) {
+        const char* font = cmd["font"] | "small";
+        if (strcmp(font, "large") == 0)  u8g2.setFont(u8g2_font_ncenB14_tr);
+        else                             u8g2.setFont(u8g2_font_6x10_tf);
+        u8g2.drawStr(cmd["x"], cmd["y"], cmd["s"] | "");
+    }
+}
+
+static void renderCmds(const String& json) {
+    JsonDocument doc;
+    if (deserializeJson(doc, json) != DeserializationError::Ok) return;
+
+    u8g2.clearBuffer();
+    JsonArray cmds = doc["cmds"].as<JsonArray>();
+    for (JsonObject cmd : cmds) execCmd(cmd);
+    u8g2.sendBuffer();
+}
+
+static void renderState(RobotState s) {
+    const String& json = cachedFaces[(int)s];
+    if (json.length() > 0) {
+        renderCmds(json);
     } else {
-        u8g2.drawDisc(lx, ly, r);
-        u8g2.drawDisc(rx, ry, r);
+        // Minimal fallback — two dots + line (no hardcoded faces)
+        u8g2.clearBuffer();
+        u8g2.drawDisc(38, 26, 8);
+        u8g2.drawDisc(90, 26, 8);
+        u8g2.drawHLine(50, 46, 28);
+        u8g2.sendBuffer();
     }
-}
-
-// ─── Face templates ───────────────────────────────────────────────────────────
-
-static void faceIdle() {
-    u8g2.clearBuffer();
-    drawEyes(38, 26, 90, 26, 9);
-    u8g2.drawHLine(52, 46, 24);
-    u8g2.sendBuffer();
-}
-
-static void faceHappy() {
-    u8g2.clearBuffer();
-    drawEyes(38, 24, 90, 24, 9);
-    u8g2.drawDisc(26, 38, 5);
-    u8g2.drawDisc(102, 38, 5);
-    u8g2.drawHLine(50, 46, 28);
-    u8g2.drawPixel(50, 47);
-    u8g2.drawPixel(77, 47);
-    u8g2.sendBuffer();
-}
-
-static void faceSad() {
-    u8g2.clearBuffer();
-    drawEyes(38, 28, 90, 28, 8);
-    u8g2.drawHLine(52, 48, 24);
-    u8g2.drawPixel(52, 47);
-    u8g2.drawPixel(75, 47);
-    u8g2.sendBuffer();
-}
-
-static void faceThinking() {
-    u8g2.clearBuffer();
-    u8g2.drawDisc(38, 22, 9);
-    u8g2.drawDisc(90, 18, 9);
-    for (int i = 0; i < 3; i++)
-        u8g2.drawDisc(54 + i * 10, 50, 2);
-    u8g2.sendBuffer();
-}
-
-static void faceSleeping() {
-    u8g2.clearBuffer();
-    drawEyes(38, 26, 90, 26, 9, true);
-    u8g2.setFont(u8g2_font_6x10_tf);
-    u8g2.drawStr(96, 18, "z");
-    u8g2.drawStr(104, 12, "z");
-    u8g2.drawStr(112, 6,  "z");
-    u8g2.sendBuffer();
-}
-
-static void faceListening() {
-    u8g2.clearBuffer();
-    drawEyes(38, 26, 90, 26, 11);
-    u8g2.drawCircle(64, 48, 6);
-    u8g2.sendBuffer();
-}
-
-static void faceSpeaking() {
-    u8g2.clearBuffer();
-    drawEyes(38, 26, 90, 26, 9);
-    u8g2.drawRBox(50, 42, 28, 12, 4);
-    u8g2.sendBuffer();
-}
-
-static void faceError() {
-    u8g2.clearBuffer();
-    for (int d = -6; d <= 6; d++) {
-        u8g2.drawPixel(38 + d, 26 + d);
-        u8g2.drawPixel(38 + d, 26 - d);
-        u8g2.drawPixel(90 + d, 26 + d);
-        u8g2.drawPixel(90 + d, 26 - d);
-    }
-    u8g2.drawHLine(54, 46, 20);
-    u8g2.sendBuffer();
-}
-
-static void renderFace(const String& face) {
-    if      (face == "happy")     faceHappy();
-    else if (face == "sad")       faceSad();
-    else if (face == "thinking")  faceThinking();
-    else if (face == "sleeping")  faceSleeping();
-    else if (face == "listening") faceListening();
-    else if (face == "speaking")  faceSpeaking();
-    else if (face == "error")     faceError();
-    else                          faceIdle();
 }
 
 // ─── Boot log ─────────────────────────────────────────────────────────────────
-// Layout: "TARA" logo (top 18px) + divider + 4 scrolling log lines
-
 static const int LOG_Y_START = 20;
 static const int LOG_LINE_H  = 11;
 static const int LOG_MAX     = 4;
@@ -134,24 +89,16 @@ static int    logCount = 0;
 
 static void redrawBootScreen() {
     u8g2.clearBuffer();
-
-    // Logo
     u8g2.setFont(u8g2_font_ncenB14_tr);
     int logoW = u8g2.getStrWidth("TARA");
     u8g2.drawStr((128 - logoW) / 2, 15, "TARA");
-
-    // Divider
     u8g2.drawHLine(0, 18, 128);
-
-    // Log lines (font ascent ~8px, y is baseline)
     u8g2.setFont(u8g2_font_6x10_tf);
     int start = (logCount > LOG_MAX) ? logCount - LOG_MAX : 0;
     for (int i = start; i < logCount; i++) {
         int row = i - start;
-        u8g2.drawStr(0, LOG_Y_START + row * LOG_LINE_H + 8,
-                     logLines[i % LOG_MAX].c_str());
+        u8g2.drawStr(0, LOG_Y_START + row * LOG_LINE_H + 8, logLines[i % LOG_MAX].c_str());
     }
-
     u8g2.sendBuffer();
 }
 
@@ -173,21 +120,11 @@ void setupDeviceHardware() {
 
 void setState(RobotState s) {
     currentState = s;
-    switch (s) {
-        case STATE_BOOTING:
-        case STATE_SLEEPING:    faceSleeping();  break;
-        case STATE_CONNECTING:
-        case STATE_REGISTERING:
-        case STATE_CONFIGURING:
-        case STATE_THINKING:    faceThinking();  break;
-        case STATE_IDLE:        faceIdle();      break;
-        case STATE_LISTENING:   faceListening(); break;
-        case STATE_SPEAKING:    faceSpeaking();  break;
-        case STATE_ERROR:       faceError();     break;
-    }
+    renderState(s);
 }
 
 void renderIdleFace() {
+    // Blink by briefly swapping to a closed-eyes variant then back
     static unsigned long lastBlink = 0;
     static bool isBlinking = false;
     unsigned long now = millis();
@@ -195,13 +132,15 @@ void renderIdleFace() {
     if (!isBlinking && now - lastBlink > 4000) {
         isBlinking = true;
         lastBlink  = now;
+        // Closed eyes: hlines instead of discs
         u8g2.clearBuffer();
-        drawEyes(38, 26, 90, 26, 9, true);
+        u8g2.drawHLine(29, 26, 18);
+        u8g2.drawHLine(81, 26, 18);
         u8g2.drawHLine(52, 46, 24);
         u8g2.sendBuffer();
     } else if (isBlinking && now - lastBlink > 120) {
         isBlinking = false;
-        faceIdle();
+        renderState(STATE_IDLE);
     }
 }
 
@@ -210,14 +149,45 @@ void applyRobotConfig(const JsonDocument& doc) {
     volume            = doc["volume"]            | volume;
     idleTimeout       = doc["idleTimeout"]       | idleTimeout;
     u8g2.setContrast((uint8_t)displayBrightness);
+
+    // Load cached face JSON for each state from config
+    // Server pushes: { "faces": { "idle": "{cmds:[...]}", "happy": "...", ... } }
+    JsonObjectConst faces = doc["faces"].as<JsonObjectConst>();
+    if (faces) {
+        for (int i = 0; i < 10; i++) {
+            const char* name = STATE_NAMES[i];
+            if (faces[name].is<const char*>()) {
+                cachedFaces[i] = faces[name].as<String>();
+            }
+        }
+        Serial.println("[Robot] Face cache updated from config");
+    }
 }
 
 void handleDisplay(const String& json) {
     JsonDocument doc;
     if (deserializeJson(doc, json) != DeserializationError::Ok) return;
-    String face = doc["face"] | String("idle");
-    Serial.printf("[Robot] Display: %s\n", face.c_str());
-    renderFace(face);
+
+    // If "cmds" array present: render directly
+    if (doc["cmds"].is<JsonArray>()) {
+        Serial.println("[Robot] Display: inline cmds");
+        renderCmds(json);
+        return;
+    }
+
+    // If "face" name present: look up in cache and render
+    String faceName = doc["face"] | String("idle");
+    Serial.printf("[Robot] Display: face=%s\n", faceName.c_str());
+
+    // Find matching state index
+    for (int i = 0; i < 10; i++) {
+        if (faceName == STATE_NAMES[i] && cachedFaces[i].length() > 0) {
+            renderCmds(cachedFaces[i]);
+            return;
+        }
+    }
+    // Unknown face: fallback to STATE_IDLE
+    renderState(STATE_IDLE);
 }
 
 void handleEmotion(const String& json) {
@@ -228,16 +198,15 @@ void handleEmotion(const String& json) {
     emotion.energy = doc["energy"] | emotion.energy;
     emotion.since  = millis();
 
-    Serial.printf("[Robot] Emotion: %s energy=%d\n",
-        emotion.state.c_str(), emotion.energy);
+    Serial.printf("[Robot] Emotion: %s energy=%d\n", emotion.state.c_str(), emotion.energy);
 
-    renderFace(emotion.state);
-
-    if      (emotion.state == "listening") setState(STATE_LISTENING);
-    else if (emotion.state == "thinking")  setState(STATE_THINKING);
-    else if (emotion.state == "speaking")  setState(STATE_SPEAKING);
-    else if (emotion.state == "sleeping")  setState(STATE_SLEEPING);
-    else                                   setState(STATE_IDLE);
+    // Map emotion to robot state and render
+    RobotState s = STATE_IDLE;
+    if      (emotion.state == "listening") s = STATE_LISTENING;
+    else if (emotion.state == "thinking")  s = STATE_THINKING;
+    else if (emotion.state == "speaking")  s = STATE_SPEAKING;
+    else if (emotion.state == "sleeping")  s = STATE_SLEEPING;
+    setState(s);
 }
 
 void handleSpeech(const String& json) {

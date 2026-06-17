@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { db } from '../db';
 import { publishToRobot } from '../mqtt';
+import { buildFacesMap } from './face';
 
 export async function robotRoutes(app: FastifyInstance) {
     // GET /robot — list all registered robots with latest health
@@ -8,9 +9,7 @@ export async function robotRoutes(app: FastifyInstance) {
         return db.device.findMany({
             where:   { deviceType: 'robot' },
             orderBy: { lastSeen: 'desc' },
-            include: {
-                readings: { take: 1, orderBy: { recordedAt: 'desc' } },
-            },
+            include: { readings: { take: 1, orderBy: { recordedAt: 'desc' } } },
         });
     });
 
@@ -30,16 +29,32 @@ export async function robotRoutes(app: FastifyInstance) {
         }
     );
 
-    // POST /robot/:deviceId/display — send display command
+    // POST /robot/:deviceId/display — send draw commands or face name
+    // If body has "face" name: resolve to cmds from DB and send inline
+    // If body has "cmds" array: forward directly
     app.post<{
         Params: { deviceId: string };
-        Body:   { face: string };
+        Body:   { face?: string; cmds?: object[] };
     }>('/:deviceId/display', async (req, reply) => {
-        publishToRobot(req.params.deviceId, 'display', req.body);
-        return reply.code(200).send({ ok: true });
+        const { deviceId } = req.params;
+        const { face, cmds } = req.body;
+
+        if (cmds) {
+            publishToRobot(deviceId, 'display', { cmds });
+            return reply.code(200).send({ ok: true });
+        }
+
+        if (face) {
+            const faceDoc = await db.face.findUnique({ where: { name: face } });
+            if (!faceDoc) return reply.code(404).send({ error: `Face '${face}' not found` });
+            publishToRobot(deviceId, 'display', { cmds: faceDoc.cmds });
+            return reply.code(200).send({ ok: true });
+        }
+
+        return reply.code(400).send({ error: 'Provide either face or cmds' });
     });
 
-    // POST /robot/:deviceId/emotion — send emotion command
+    // POST /robot/:deviceId/emotion
     app.post<{
         Params: { deviceId: string };
         Body:   { state: string; energy?: number };
@@ -48,7 +63,7 @@ export async function robotRoutes(app: FastifyInstance) {
         return reply.code(200).send({ ok: true });
     });
 
-    // POST /robot/:deviceId/speech — send speech command
+    // POST /robot/:deviceId/speech
     app.post<{
         Params: { deviceId: string };
         Body:   { text: string };
@@ -57,12 +72,13 @@ export async function robotRoutes(app: FastifyInstance) {
         return reply.code(200).send({ ok: true });
     });
 
-    // PUT /robot/:deviceId/config — push config update
+    // PUT /robot/:deviceId/config — push config; always injects current faces
     app.put<{
         Params: { deviceId: string };
         Body:   Record<string, unknown>;
     }>('/:deviceId/config', async (req, reply) => {
         const { deviceId } = req.params;
+        const faces = await buildFacesMap();
 
         const last = await db.deviceConfig.findFirst({
             where:   { deviceId },
@@ -70,11 +86,13 @@ export async function robotRoutes(app: FastifyInstance) {
         });
         const version = String((parseInt(last?.version ?? '0') + 1));
 
+        const configWithFaces = { ...req.body, faces, version };
+
         await db.deviceConfig.create({
-            data: { deviceId, version, config: req.body as Record<string, string | number | boolean | null> },
+            data: { deviceId, version, config: configWithFaces },
         });
 
-        publishToRobot(deviceId, 'config', { ...req.body, version }, 1);
+        publishToRobot(deviceId, 'config', configWithFaces, 1);
         return reply.code(201).send({ version });
     });
 }

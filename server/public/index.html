@@ -209,12 +209,14 @@ async function selectDevice(id) {
       <div class="tab active" onclick="switchTab('health')">Health</div>
       <div class="tab" onclick="switchTab('hardware')">Hardware</div>
       <div class="tab" onclick="switchTab('pipeline')">Pipeline</div>
+      <div class="tab" onclick="switchTab('faces')">Faces</div>
       <div class="tab" onclick="switchTab('control')">Control</div>
       <div class="tab" onclick="switchTab('sensors')">Sensors</div>
     </div>
     <div id="tab-health"   class="tab-content active"></div>
     <div id="tab-hardware" class="tab-content"></div>
     <div id="tab-pipeline" class="tab-content"></div>
+    <div id="tab-faces"    class="tab-content"></div>
     <div id="tab-control"  class="tab-content"></div>
     <div id="tab-sensors"  class="tab-content"></div>
   `;
@@ -223,13 +225,14 @@ async function selectDevice(id) {
   renderHealth(d);
   renderHardware(id, devicePins);
   renderPipeline(id, devicePins);
+  renderFaces(id);
   renderControl(id);
   renderSensors(d.readings || []);
 }
 
 function switchTab(name) {
   document.querySelectorAll('.tab').forEach((t,i) => {
-    const names = ['health','hardware','pipeline','control','sensors'];
+    const names = ['health','hardware','pipeline','faces','control','sensors'];
     t.classList.toggle('active', names[i] === name);
   });
   document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
@@ -525,7 +528,125 @@ async function deleteRule(deviceId, id) {
   } catch(e) { toast(`Error: ${e.message}`, false); }
 }
 
-// ── Tab 4: Control ───────────────────────────────────────────────────────────
+// ── Tab 4: Faces ─────────────────────────────────────────────────────────────
+async function renderFaces(deviceId) {
+  const faces = await api('GET', '/faces');
+  const el = document.getElementById('tab-faces');
+
+  el.innerHTML = `
+    <div class="card">
+      <h3 style="display:flex;align-items:center;justify-content:space-between">
+        Face Library
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-ghost btn-sm" onclick="pushFacesToDevice('${deviceId}')">↑ Push All to Device</button>
+          <button class="btn btn-primary btn-sm" onclick="showNewFaceForm()">+ New Face</button>
+        </div>
+      </h3>
+      <p style="font-size:.78rem;color:var(--muted);margin-bottom:14px">
+        Each face is a JSON draw command list rendered at runtime on the device.
+        Edit, push to device, or create new faces.
+      </p>
+      <div id="face-list">
+        ${faces.map(f => faceCard(f)).join('')}
+      </div>
+    </div>
+    <div id="new-face-form"></div>
+  `;
+}
+
+function faceCard(f) {
+  const cmds = JSON.stringify(f.cmds, null, 2);
+  return `
+    <div class="pipeline-form" id="face-card-${f.name}" style="margin-bottom:12px">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+        <strong style="font-size:.9rem">${f.label}</strong>
+        <code style="font-size:.72rem;color:var(--muted)">${f.name}</code>
+        <span style="margin-left:auto;display:flex;gap:6px">
+          <button class="btn btn-ghost btn-sm" onclick="previewFace('${f.name}')">Preview OLED</button>
+          <button class="btn btn-primary btn-sm" onclick="saveFace('${f.name}')">Save</button>
+          <button class="btn btn-danger btn-sm"  onclick="deleteFace('${f.name}')">✕</button>
+        </span>
+      </div>
+      <textarea id="face-editor-${f.name}" style="height:160px;font-size:.75rem">${cmds}</textarea>
+      <p style="font-size:.72rem;color:var(--muted);margin-top:6px">
+        Commands: <code>disc</code> <code>circle</code> <code>hline</code> <code>vline</code>
+        <code>pixel</code> <code>rbox</code> <code>rect</code> <code>text</code> —
+        fields: <code>t x y r w h s font</code>
+      </p>
+    </div>`;
+}
+
+function showNewFaceForm() {
+  document.getElementById('new-face-form').innerHTML = `
+    <div class="card pipeline-form">
+      <h3>New Face</h3>
+      <div class="row">
+        <div><label>Name (id)</label><input id="nf-name" type="text" placeholder="e.g. wink" /></div>
+        <div><label>Label</label><input id="nf-label" type="text" placeholder="e.g. Wink" /></div>
+      </div>
+      <label style="margin-top:8px;display:block">Draw Commands (JSON array)</label>
+      <textarea id="nf-cmds" style="height:160px;font-size:.75rem">[\n  {"t":"disc","x":38,"y":26,"r":9},\n  {"t":"disc","x":90,"y":26,"r":9}\n]</textarea>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn btn-primary" onclick="createFace()">Create</button>
+        <button class="btn btn-ghost"   onclick="document.getElementById('new-face-form').innerHTML=''">Cancel</button>
+      </div>
+    </div>`;
+}
+
+async function saveFace(name) {
+  const raw = document.getElementById(`face-editor-${name}`).value;
+  let cmds;
+  try { cmds = JSON.parse(raw); } catch { toast('Invalid JSON', false); return; }
+  try {
+    await api('PUT', `/faces/${name}`, { cmds });
+    toast(`Face '${name}' saved`);
+  } catch(e) { toast(`Error: ${e.message}`, false); }
+}
+
+async function createFace() {
+  const name  = document.getElementById('nf-name').value.trim();
+  const label = document.getElementById('nf-label').value.trim() || name;
+  const raw   = document.getElementById('nf-cmds').value;
+  if (!name) { toast('Name is required', false); return; }
+  let cmds;
+  try { cmds = JSON.parse(raw); } catch { toast('Invalid JSON', false); return; }
+  try {
+    await api('PUT', `/faces/${name}`, { label, cmds });
+    toast(`Face '${name}' created`);
+    renderFaces(selected);
+  } catch(e) { toast(`Error: ${e.message}`, false); }
+}
+
+async function deleteFace(name) {
+  if (!confirm(`Delete face '${name}'?`)) return;
+  try {
+    await api('DELETE', `/faces/${name}`);
+    toast(`Face '${name}' deleted`);
+    renderFaces(selected);
+  } catch(e) { toast(`Error: ${e.message}`, false); }
+}
+
+async function previewFace(name) {
+  try {
+    await api('POST', `/robot/${selected}/display`, { face: name });
+    toast(`Previewing '${name}' on device`);
+  } catch(e) { toast(`Error: ${e.message}`, false); }
+}
+
+async function pushFacesToDevice(deviceId) {
+  try {
+    // Trigger a config push which injects the current face map
+    const last = await api('GET', `/robot/${deviceId}`);
+    const lastCfg = (last.configs || [])[0]?.config || {};
+    const rest = Object.fromEntries(
+      Object.entries(lastCfg).filter(([k]) => k !== 'faces' && k !== 'version')
+    );
+    await api('PUT', `/robot/${deviceId}/config`, rest);
+    toast('Faces pushed to device via config');
+  } catch(e) { toast(`Error: ${e.message}`, false); }
+}
+
+// ── Tab 5: Control ───────────────────────────────────────────────────────────
 function renderControl(deviceId) {
   document.getElementById('tab-control').innerHTML = `
     <div class="card">

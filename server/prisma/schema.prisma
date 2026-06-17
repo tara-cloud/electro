@@ -71,3 +71,15 @@ model PipelineRule {
   enabled   Boolean  @default(true)
   createdAt DateTime @default(now())
 }
+
+// Face — a named drawing stored as a JSON command list.
+// The device fetches all faces at startup via config and renders them at runtime.
+// name is global (shared across all devices of the same type).
+model Face {
+  id        String   @id @default(cuid())
+  name      String   @unique  // e.g. "idle", "happy", "thinking"
+  label     String            // human-readable display label
+  cmds      Json              // array of draw commands
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+}

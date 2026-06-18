@@ -351,6 +351,11 @@ function renderMiddle(proj) {
 
   const servicesHtml = (proj.services || []).map(s => serviceCard(s, proj.id)).join('');
 
+  const projectQueues = getProjectQueues(proj.id);
+  const queuesHtml = projectQueues.length
+    ? projectQueues.map(q => queueCard(q, proj.id)).join('')
+    : '<p style="color:var(--muted);font-size:.78rem">No queues yet.</p>';
+
   body.innerHTML = `
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
       <div class="section-title" style="margin:0">Devices</div>
@@ -364,6 +369,14 @@ function renderMiddle(proj) {
     </div>
     <div id="services-list-${proj.id}">${servicesHtml}</div>
     <div id="svc-form-${proj.id}"></div>
+
+    <div style="display:flex;align-items:center;justify-content:space-between;margin:12px 0 6px">
+      <div class="section-title" style="margin:0">Queues</div>
+      <button class="btn btn-ghost btn-sm" onclick="showCreateQueue('${proj.id}')">+ New</button>
+    </div>
+    <div id="queues-list-${proj.id}">${queuesHtml}</div>
+    <div id="queue-form-${proj.id}"></div>
+
     <div id="assign-form-${proj.id}"></div>
   `;
 }
@@ -477,6 +490,255 @@ async function getProjectPins() {
   }
   return results;
 }
+
+// ── MQTT Queue management ─────────────────────────────────────────────────
+// Queues are stored in localStorage as mqttq_{projectId}_{name}
+// Schema field: { fieldName, type, defaultValue, required, description }
+
+function mqttqKey(projId, name) { return `mqttq_${projId}_${name}`; }
+
+function getProjectQueues(projId) {
+  const result = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (!key?.startsWith(`mqttq_${projId}_`)) continue;
+    const q = JSON.parse(localStorage.getItem(key) || 'null');
+    if (q) result.push(q);
+  }
+  return result.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function saveQueue(projId, queue) {
+  localStorage.setItem(mqttqKey(projId, queue.name), JSON.stringify(queue));
+}
+
+function deleteQueue(projId, name) {
+  localStorage.removeItem(mqttqKey(projId, name));
+}
+
+function queueCard(q, projId) {
+  const fieldCount = (q.schema || []).length;
+  const topic = q.topic || `tara/${projId}/${q.name}`;
+  return `<div class="comp-card" onclick="openQueueDetail('${projId}','${q.name}')">
+    <div class="cname">${q.name}</div>
+    <div class="cmeta">
+      <code style="font-size:.7rem">${topic}</code>
+      <span style="font-size:.7rem;color:var(--muted)">${fieldCount} field${fieldCount === 1 ? '' : 's'}</span>
+    </div>
+    ${q.description ? `<div class="cdesc">${q.description}</div>` : ''}
+  </div>`;
+}
+
+// ── Create / Edit Queue ────────────────────────────────────────────────────
+
+let _editQueueFields = []; // working copy during create/edit
+
+function showCreateQueue(projId) {
+  _editQueueFields = [];
+  const el = document.getElementById(`queue-form-${projId}`);
+  el.innerHTML = buildQueueForm(projId, null);
+}
+
+function buildQueueForm(projId, existing) {
+  const isEdit = !!existing;
+  const fields = isEdit ? (existing.schema || []) : _editQueueFields;
+  _editQueueFields = fields;
+
+  const fieldRows = fields.map((f, i) => `
+    <div class="io-row" id="qf-row-${i}" style="flex-wrap:wrap;gap:5px;align-items:flex-start;background:var(--surface2);border-radius:5px;padding:6px 8px;margin-bottom:5px">
+      <div style="display:flex;gap:5px;flex:1;min-width:200px">
+        <input value="${f.fieldName}" onchange="updateQueueField(${i},'fieldName',this.value)"
+          placeholder="fieldName" style="flex:1;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 7px;font-size:.75rem" />
+        <select onchange="updateQueueField(${i},'type',this.value)" style="width:90px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:.75rem">
+          ${['string','number','boolean','object','array','enum'].map(t =>
+            `<option value="${t}" ${f.type===t?'selected':''}>${t}</option>`
+          ).join('')}
+        </select>
+      </div>
+      <div style="display:flex;gap:5px;flex:1;min-width:160px">
+        <input value="${f.defaultValue??''}" onchange="updateQueueField(${i},'defaultValue',this.value)"
+          placeholder="default" style="flex:1;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 7px;font-size:.75rem" />
+        <input value="${f.description??''}" onchange="updateQueueField(${i},'description',this.value)"
+          placeholder="description" style="flex:1;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 7px;font-size:.75rem" />
+      </div>
+      <div style="display:flex;align-items:center;gap:5px">
+        <label style="font-size:.7rem;color:var(--muted);display:flex;align-items:center;gap:3px;cursor:pointer">
+          <input type="checkbox" ${f.required?'checked':''} onchange="updateQueueField(${i},'required',this.checked)" /> req
+        </label>
+        <button class="btn btn-danger btn-sm" onclick="removeQueueField(${i},'${projId}',${isEdit?`'${existing.name}'`:'null'})">✕</button>
+      </div>
+    </div>`).join('');
+
+  return `<div class="inline-form" style="margin-top:4px">
+    <div><label>Queue Name</label>
+      <input id="qf-name" value="${isEdit?existing.name:''}" placeholder="e.g. emotion-state" ${isEdit?'disabled':''} />
+    </div>
+    <div class="row">
+      <div><label>MQTT Topic</label>
+        <input id="qf-topic" value="${isEdit?existing.topic||'':''}" placeholder="tara/${projId}/queue-name" />
+      </div>
+      <div><label>Description</label>
+        <input id="qf-desc" value="${isEdit?existing.description||'':''}" placeholder="Optional" />
+      </div>
+    </div>
+
+    <div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <label style="font-size:.72rem;color:var(--muted)">Schema Fields</label>
+        <button class="btn btn-ghost btn-sm" onclick="addQueueField('${projId}',${isEdit?`'${existing.name}'`:'null'})">+ Field</button>
+      </div>
+      <div id="qf-fields">${fieldRows || '<p style="font-size:.75rem;color:var(--muted)">No fields yet. Add a field to define the data structure.</p>'}</div>
+    </div>
+
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-primary btn-sm" onclick="saveQueueForm('${projId}',${isEdit?`'${existing.name}'`:'null'})">${isEdit?'Update':'Create'} Queue</button>
+      <button class="btn btn-ghost btn-sm" onclick="closeQueueForm('${projId}')">Cancel</button>
+    </div>
+  </div>`;
+}
+
+function addQueueField(projId, existingName) {
+  _editQueueFields.push({ fieldName: '', type: 'string', defaultValue: '', description: '', required: false });
+  refreshQueueForm(projId, existingName);
+}
+
+function removeQueueField(idx, projId, existingName) {
+  _editQueueFields.splice(idx, 1);
+  refreshQueueForm(projId, existingName);
+}
+
+function updateQueueField(idx, key, value) {
+  if (_editQueueFields[idx]) _editQueueFields[idx][key] = value;
+}
+
+function isExisting(existingName) { return existingName && existingName !== 'null'; }
+
+function refreshQueueForm(projId, existingName) {
+  const existing = isExisting(existingName)
+    ? JSON.parse(localStorage.getItem(mqttqKey(projId, existingName)) || 'null')
+    : null;
+  const el = isExisting(existingName)
+    ? document.getElementById(`queue-detail-form-${existingName}`)
+    : document.getElementById(`queue-form-${projId}`);
+  if (el) el.innerHTML = buildQueueForm(projId, existing);
+}
+
+function saveQueueForm(projId, existingName) {
+  const name  = isExisting(existingName)
+    ? existingName
+    : document.getElementById('qf-name')?.value.trim();
+  const topic = document.getElementById('qf-topic')?.value.trim();
+  const desc  = document.getElementById('qf-desc')?.value.trim();
+  if (!name) { toast('Queue name required', false); return; }
+
+  const schema = _editQueueFields
+    .filter(f => f.fieldName.trim())
+    .map(f => ({ ...f, fieldName: f.fieldName.trim() }));
+
+  saveQueue(projId, { name, topic: topic || `tara/${projId}/${name}`, description: desc, schema });
+  toast(`Queue "${name}" saved`);
+  closeQueueForm(projId);
+
+  // Refresh queues list in middle panel
+  const qEl = document.getElementById(`queues-list-${projId}`);
+  if (qEl) qEl.innerHTML = getProjectQueues(projId).map(q => queueCard(q, projId)).join('') ||
+    '<p style="color:var(--muted);font-size:.78rem">No queues yet.</p>';
+}
+
+function closeQueueForm(projId) {
+  const el = document.getElementById(`queue-form-${projId}`);
+  if (el) el.innerHTML = '';
+  _editQueueFields = [];
+}
+
+// ── Queue detail overlay ───────────────────────────────────────────────────
+
+let _queueOverlayProjId = null;
+let _queueOverlayName   = null;
+
+function openQueueDetail(projId, name) {
+  _queueOverlayProjId = projId;
+  _queueOverlayName   = name;
+  const q = JSON.parse(localStorage.getItem(mqttqKey(projId, name)) || 'null');
+  if (!q) return;
+  _editQueueFields = structuredClone(q.schema || []);
+  renderQueueDetail(projId, q);
+  document.getElementById('comp-detail').classList.add('open');
+}
+
+function closeQueueDetail() {
+  document.getElementById('comp-detail').classList.remove('open');
+  _queueOverlayProjId = null;
+  _queueOverlayName   = null;
+  _editQueueFields    = [];
+}
+
+function sampleValue(f) {
+  if (f.defaultValue !== '') return f.defaultValue;
+  if (f.type === 'number')  return 0;
+  if (f.type === 'boolean') return false;
+  return '...';
+}
+
+function renderQueueDetail(projId, q) {
+  const sampleDoc = {};
+  for (const f of q.schema || []) {
+    sampleDoc[f.fieldName] = sampleValue(f);
+  }
+
+  document.getElementById('comp-detail').innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;padding:12px 18px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--bg);z-index:5">
+      <button class="btn btn-ghost btn-sm" onclick="closeQueueDetail()">← Back</button>
+      <strong style="font-size:.95rem">⟳ ${q.name}</strong>
+      <code style="font-size:.72rem;color:var(--accent);margin-left:4px">${q.topic}</code>
+    </div>
+    <div style="padding:18px;display:flex;flex-direction:column;gap:14px">
+
+      <div class="card">
+        <h3>Example Payload</h3>
+        <pre style="background:var(--bg);border:1px solid var(--border);border-radius:5px;padding:10px;font-size:.75rem;overflow-x:auto;color:var(--green)">${JSON.stringify(sampleDoc, null, 2)}</pre>
+        ${q.description ? `<p style="font-size:.78rem;color:var(--muted);margin-top:8px">${q.description}</p>` : ''}
+      </div>
+
+      <div class="card">
+        <h3>Schema</h3>
+        <table>
+          <thead><tr><th>Field</th><th>Type</th><th>Default</th><th>Required</th><th>Description</th></tr></thead>
+          <tbody>
+            ${(q.schema || []).map(f => `<tr>
+              <td><strong>${f.fieldName}</strong></td>
+              <td><code>${f.type}</code></td>
+              <td style="color:var(--muted);font-size:.75rem">${f.defaultValue || '—'}</td>
+              <td style="text-align:center">${f.required ? '✓' : ''}</td>
+              <td style="color:var(--muted);font-size:.75rem">${f.description || '—'}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h3>Edit Queue</h3>
+        <div id="queue-detail-form-${q.name}">${buildQueueForm(projId, q)}</div>
+      </div>
+
+      <div class="card" style="border-color:var(--red)">
+        <h3 style="color:var(--red)">Danger Zone</h3>
+        <button class="btn btn-danger btn-sm" onclick="confirmDeleteQueue('${projId}','${q.name}')">Delete Queue</button>
+      </div>
+    </div>`;
+}
+
+function confirmDeleteQueue(projId, name) {
+  if (!confirm(`Delete queue "${name}"?`)) return;
+  deleteQueue(projId, name);
+  toast(`Queue "${name}" deleted`);
+  closeQueueDetail();
+  const qEl = document.getElementById(`queues-list-${projId}`);
+  if (qEl) qEl.innerHTML = getProjectQueues(projId).map(q => queueCard(q, projId)).join('') ||
+    '<p style="color:var(--muted);font-size:.78rem">No queues yet.</p>';
+}
+
+// ── Service queue helpers (used by collectQueues) ──────────────────────────
 
 function queueRow(q) {
   return `<div class="rule-row">

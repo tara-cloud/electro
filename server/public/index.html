@@ -509,7 +509,7 @@ function ioRow(svcId, kind, item, idx) {
 function ruleRow(svcId, rule, idx) {
   return `<div class="rule-row">
     <span style="font-size:.9rem">⚙</span>
-    <span class="rule-desc">${rule.description || rule.when + ' → ' + rule.then}</span>
+    <span class="rule-desc">${rule.description || rule.when + ' → ' + rule.action}</span>
     <span class="rule-del" onclick="removeRule('${svcId}',${idx})">✕</span>
   </div>`;
 }
@@ -577,7 +577,7 @@ function saveRule(svcId) {
   const desc = document.getElementById('rule-desc-in').value.trim();
   if (!when || !then) { toast('When and Then required', false); return; }
   const state = loadServiceState(svcId);
-  state.rules.push({ when, then, description: desc });
+  state.rules.push({ when, action: then, description: desc });
   saveServiceState(svcId, state);
   renderServiceDetail(svcId, state);
 }
@@ -587,8 +587,6 @@ function removeRule(svcId, idx) {
   state.rules.splice(idx, 1);
   saveServiceState(svcId, state);
   renderServiceDetail(svcId, state);
-}
-  } catch(e) { toast(`Error: ${e.message}`, false); }
 }
 
 async function deleteService(projId, sid) {

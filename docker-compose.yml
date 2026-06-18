@@ -26,6 +26,8 @@ services:
       DATABASE_URL: postgresql://electro_user:${DB_PASSWORD}@postgres:5432/electro
       MQTT_URL: mqtt://mosquitto:1883
       PORT: 4000
+      POCKET_URL: http://192.168.0.107:30600
+      POCKET_TOKEN: ${POCKET_TOKEN:-change-me-pocket-master-key}
     depends_on:
       - postgres
       - mosquitto

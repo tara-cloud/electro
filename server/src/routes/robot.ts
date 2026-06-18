@@ -107,4 +107,67 @@ export async function robotRoutes(app: FastifyInstance) {
 
         return reply.code(200).send({ pushed: devices.length, version, url });
     });
+
+    // GET /robot/:deviceId/ota-check — compare device firmware version against latest in Pocket
+    app.get<{ Params: { deviceId: string } }>(
+        '/:deviceId/ota-check',
+        async (req, reply) => {
+            const device = await db.device.findUnique({ where: { deviceId: req.params.deviceId } });
+            if (!device) return reply.code(404).send({ error: 'device not found' });
+
+            const pocketUrl = process.env.POCKET_URL ?? 'http://192.168.0.107:30600';
+
+            // Ask Pocket for the latest OTA release for this device type
+            type OTARelease = { id: number; version: string; releaseNotes: string; artifact: { name: string } };
+            let releases: OTARelease[] = [];
+            try {
+                const res = await fetch(`${pocketUrl}/api/ota`);
+                if (res.ok) releases = (await res.json()) as OTARelease[];
+            } catch {
+                return reply.code(502).send({ error: 'Cannot reach Pocket' });
+            }
+
+            // Find the latest release matching this device type
+            const matching = releases
+                .filter(r => r.artifact?.name?.includes(device.deviceType) ||
+                             device.deviceType === 'robot')
+                .sort((a, b) => b.id - a.id);
+
+            if (!matching.length) {
+                return reply.send({ available: false, currentVersion: device.firmwareVersion });
+            }
+
+            const latest = matching[0];
+            const available = latest.version !== device.firmwareVersion;
+            return reply.send({
+                available,
+                currentVersion:  device.firmwareVersion,
+                latestVersion:   latest.version,
+                releaseNotes:    latest.releaseNotes,
+                otaReleaseId:    latest.id,
+            });
+        }
+    );
+
+    // POST /robot/:deviceId/push-ota — trigger OTA push for a specific device via Pocket release
+    app.post<{
+        Params: { deviceId: string };
+        Body:   { otaReleaseId: number };
+    }>('/:deviceId/push-ota', async (req, reply) => {
+        const { otaReleaseId } = req.body;
+
+        const pocketUrl   = process.env.POCKET_URL  ?? 'http://192.168.0.107:30600';
+        const pocketToken = process.env.POCKET_TOKEN ?? '';
+
+        const res = await fetch(`${pocketUrl}/api/ota/${otaReleaseId}/push`, {
+            method: 'POST',
+            headers: pocketToken ? { 'X-Pocket-Token': pocketToken } : {},
+        }).catch(() => null);
+
+        if (res?.ok !== true) {
+            return reply.code(502).send({ error: 'Pocket OTA push failed' });
+        }
+
+        return reply.code(200).send({ ok: true });
+    });
 }

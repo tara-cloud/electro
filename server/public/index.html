@@ -230,7 +230,12 @@ async function loadAll() {
     api('GET', '/robot'),
   ]);
   renderProjectList();
-  if (selectedProj) renderMiddle(selectedProj);
+  if (selectedProj && selectedProj !== '__unassigned') {
+    const proj = await api('GET', `/projects/${selectedProj}`);
+    renderMiddle(proj);
+  } else if (selectedProj === '__unassigned') {
+    selectUnassigned();
+  }
 }
 
 // ── Col 1: Project list ────────────────────────────────────────────────────
@@ -497,6 +502,7 @@ async function selectDevice(id) {
   detail.innerHTML = `
     <div class="tabs" id="tabs">
       <div class="tab active" onclick="switchTab('health')">Health</div>
+      <div class="tab" onclick="switchTab('config')">Config</div>
       <div class="tab" onclick="switchTab('hardware')">Hardware</div>
       <div class="tab" onclick="switchTab('pipeline')">Pipeline</div>
       <div class="tab" onclick="switchTab('faces')">Faces</div>
@@ -504,6 +510,7 @@ async function selectDevice(id) {
       <div class="tab" onclick="switchTab('sensors')">Sensors</div>
     </div>
     <div id="tab-health"   class="tab-content active"></div>
+    <div id="tab-config"   class="tab-content"></div>
     <div id="tab-hardware" class="tab-content"></div>
     <div id="tab-pipeline" class="tab-content"></div>
     <div id="tab-faces"    class="tab-content"></div>
@@ -518,6 +525,7 @@ async function selectDevice(id) {
   devicePins = pins;
 
   renderHealth(d);
+  renderConfig(id, d);
   renderHardware(id, pins);
   renderPipeline(id, pins);
   renderFaces(id);
@@ -526,7 +534,7 @@ async function selectDevice(id) {
 }
 
 function switchTab(name) {
-  const names = ['health','hardware','pipeline','faces','control','sensors'];
+  const names = ['health','config','hardware','pipeline','faces','control','sensors'];
   document.querySelectorAll('.tab').forEach((t,i) => t.classList.toggle('active', names[i]===name));
   document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
   document.getElementById('tab-'+name).classList.add('active');
@@ -558,6 +566,126 @@ function renderHealth(d) {
       <tr><th>Registered</th><td>${new Date(d.createdAt).toLocaleString()}</td></tr>
     </table></div>
     ${r ? buildSensorCard(r) : ''}`;
+}
+
+// ── Tab: Config ────────────────────────────────────────────────────────────
+function renderConfig(deviceId, device) {
+  const latestCfg = (device.configs || [])[0]?.config ?? {};
+  const cfgJson   = JSON.stringify(
+    Object.fromEntries(Object.entries(latestCfg).filter(([k]) => k !== 'faces' && k !== 'version')),
+    null, 2
+  );
+
+  document.getElementById('tab-config').innerHTML = `
+    <div class="card">
+      <h3>Device Identity</h3>
+      <div class="pipeline-form" style="background:var(--bg);border:none;padding:0;gap:12px">
+        <div class="row">
+          <div>
+            <label style="font-size:.72rem;color:var(--muted);display:block;margin-bottom:3px">Device Name</label>
+            <input id="cfg-name" value="${device.deviceName}" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:6px 10px;font-size:.82rem;width:100%" />
+          </div>
+          <div>
+            <label style="font-size:.72rem;color:var(--muted);display:block;margin-bottom:3px">Device Type</label>
+            <input id="cfg-type" value="${device.deviceType}" placeholder="e.g. robot, clock, sensor-hub"
+              style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:6px 10px;font-size:.82rem;width:100%" />
+          </div>
+        </div>
+        <p style="font-size:.72rem;color:var(--muted)">
+          Device type is used for OTA targeting from Pocket — all devices of the same type receive firmware updates together.
+        </p>
+        <button class="btn btn-primary btn-sm" onclick="saveDeviceIdentity('${deviceId}')">Save Identity</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Runtime Config</h3>
+      <p style="font-size:.72rem;color:var(--muted);margin-bottom:10px">
+        Pushed to device via MQTT on save. The <code>faces</code> map is injected automatically.
+      </p>
+      <textarea id="dev-config-editor" style="height:200px">${cfgJson || '{\n  "displayBrightness": 128,\n  "volume": 70,\n  "idleTimeout": 300\n}'}</textarea>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button class="btn btn-primary" onclick="pushDeviceConfig('${deviceId}')">Save &amp; Push to Device</button>
+        <button class="btn btn-ghost" onclick="fmtDeviceConfig()">Format JSON</button>
+      </div>
+    </div>
+
+    <div class="card" id="ota-check-card-${deviceId}">
+      <h3 style="display:flex;align-items:center;justify-content:space-between">
+        OTA Firmware
+        <button class="btn btn-ghost btn-sm" onclick="checkOTA('${deviceId}','${device.deviceType}')">Check for Updates</button>
+      </h3>
+      <div id="ota-status-${deviceId}">
+        <p style="font-size:.82rem;color:var(--muted)">
+          Current: <strong>v${device.firmwareVersion}</strong> &nbsp;·&nbsp;
+          Click "Check for Updates" to compare with Pocket.
+        </p>
+      </div>
+    </div>
+  `;
+}
+
+async function saveDeviceIdentity(deviceId) {
+  const name = document.getElementById('cfg-name').value.trim();
+  const type = document.getElementById('cfg-type').value.trim();
+  if (!name || !type) { toast('Name and type required', false); return; }
+  try {
+    await api('POST', '/device/register', {
+      deviceId, deviceName: name, deviceType: type, firmwareVersion: '—',
+    });
+    toast('Identity updated');
+    // Refresh device detail to reflect new type
+    selectDevice(deviceId);
+  } catch(e) { toast(`Error: ${e.message}`, false); }
+}
+
+async function pushDeviceConfig(deviceId) {
+  let cfg;
+  try { cfg = JSON.parse(document.getElementById('dev-config-editor').value); }
+  catch { toast('Invalid JSON', false); return; }
+  try {
+    const r = await api('PUT', `/robot/${deviceId}/config`, cfg);
+    toast(`Config v${r.version} pushed to device`);
+  } catch(e) { toast(`Error: ${e.message}`, false); }
+}
+function fmtDeviceConfig() {
+  const el = document.getElementById('dev-config-editor');
+  try { el.value = JSON.stringify(JSON.parse(el.value), null, 2); }
+  catch { toast('Invalid JSON', false); }
+}
+
+async function checkOTA(deviceId, deviceType) {
+  const el = document.getElementById(`ota-status-${deviceId}`);
+  el.innerHTML = '<p style="color:var(--muted);font-size:.82rem">Checking Pocket…</p>';
+  try {
+    // Ask our server to check Pocket for the latest artifact for this device type
+    const result = await api('GET', `/robot/${deviceId}/ota-check`);
+    if (result.available) {
+      el.innerHTML = `
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <div>
+            <span style="color:var(--yellow);font-weight:600;font-size:.85rem">Update available</span>
+            <span style="font-size:.78rem;color:var(--muted);margin-left:8px">v${result.currentVersion} → v${result.latestVersion}</span>
+            ${result.releaseNotes ? `<p style="font-size:.75rem;color:var(--muted);margin-top:3px">${result.releaseNotes}</p>` : ''}
+          </div>
+          <button class="btn btn-green btn-sm" onclick="pushOTAFromElectro('${deviceId}','${result.otaReleaseId}')">
+            ⚡ Update Now
+          </button>
+        </div>`;
+    } else {
+      el.innerHTML = `<p style="color:var(--green);font-size:.82rem">✓ Up to date (v${result.currentVersion})</p>`;
+    }
+  } catch(e) {
+    el.innerHTML = `<p style="color:var(--red);font-size:.82rem">Could not reach Pocket: ${e.message}</p>`;
+  }
+}
+
+async function pushOTAFromElectro(deviceId, otaReleaseId) {
+  try {
+    await api('POST', `/robot/${deviceId}/push-ota`, { otaReleaseId });
+    toast('OTA update sent to device — it will reboot shortly');
+    selectDevice(deviceId);
+  } catch(e) { toast(`Error: ${e.message}`, false); }
 }
 
 // ── Tab: Hardware ──────────────────────────────────────────────────────────

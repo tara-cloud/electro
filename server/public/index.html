@@ -816,18 +816,26 @@ async function pushOTAFromElectro(deviceId, otaReleaseId) {
 
 // ── Tab: Hardware ──────────────────────────────────────────────────────────
 function renderHardware(deviceId, pins) {
-  document.getElementById('tab-hardware').innerHTML = `
-    <div class="card">
-      <h3 style="display:flex;align-items:center;justify-content:space-between">
-        Pin Registry
-        <button class="btn btn-primary btn-sm" onclick="showAddPin('${deviceId}')">+ Add Pin</button>
-      </h3>
+  // Group pins by component name
+  const groups = {};
+  for (const p of pins) {
+    const key = p.component || 'Uncategorised';
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(p);
+  }
+
+  const groupsHtml = Object.entries(groups).map(([component, gpins]) => `
+    <div style="margin-bottom:14px">
+      <div style="font-size:.72rem;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-bottom:6px;padding-bottom:4px;border-bottom:1px solid var(--border)">
+        ${component}
+      </div>
       <table>
-        <thead><tr><th>GPIO</th><th>Label</th><th>Direction</th><th>Component</th><th>Protocol</th><th>Live</th><th>Notes</th><th></th></tr></thead>
-        <tbody id="pin-table">
-          ${pins.map(p => `<tr>
-            <td><code>${p.pin}</code></td><td><strong>${p.label}</strong></td>
-            <td>${dirBadge(p.direction)}</td><td>${p.component}</td>
+        <thead><tr><th>GPIO</th><th>Label</th><th>Direction</th><th>Protocol</th><th>Live</th><th>Notes</th><th></th></tr></thead>
+        <tbody>
+          ${gpins.map(p => `<tr>
+            <td><code>${p.pin}</code></td>
+            <td><strong>${p.label}</strong></td>
+            <td>${dirBadge(p.direction)}</td>
             <td style="color:var(--muted);font-size:.72rem">${p.protocol||'—'}</td>
             <td><span class="live-val" id="live-${deviceId}-${p.label}">—</span></td>
             <td style="color:var(--muted);font-size:.72rem">${p.notes||'—'}</td>
@@ -835,6 +843,15 @@ function renderHardware(deviceId, pins) {
           </tr>`).join('')}
         </tbody>
       </table>
+    </div>`).join('');
+
+  document.getElementById('tab-hardware').innerHTML = `
+    <div class="card">
+      <h3 style="display:flex;align-items:center;justify-content:space-between">
+        Pin Registry
+        <button class="btn btn-primary btn-sm" onclick="showAddPin('${deviceId}')">+ Add Pin</button>
+      </h3>
+      ${pins.length ? groupsHtml : '<p style="color:var(--muted);font-size:.82rem">No pins registered.</p>'}
     </div>
     <div id="add-pin-form"></div>`;
 }

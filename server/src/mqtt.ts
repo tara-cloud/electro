@@ -36,10 +36,14 @@ export function initMqtt() {
 
 async function handleMessage(deviceId: string, kind: string, raw: string) {
     if (kind === 'heartbeat') {
-        await db.device.updateMany({
-            where: { deviceId },
-            data:  { lastSeen: new Date() },
-        }).catch(() => {});
+        try {
+            const hb   = JSON.parse(raw);
+            const data: Record<string, unknown> = { lastSeen: new Date() };
+            if (hb.ip) data['ipAddress'] = hb.ip;
+            await db.device.updateMany({ where: { deviceId }, data });
+        } catch {
+            await db.device.updateMany({ where: { deviceId }, data: { lastSeen: new Date() } }).catch(() => {});
+        }
         return;
     }
 

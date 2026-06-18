@@ -159,6 +159,7 @@ void registerRobot() {
     doc["deviceName"]      = DEVICE_NAME;
     doc["deviceType"]      = DEVICE_TYPE;
     doc["firmwareVersion"] = FW_VERSION;
+    doc["ip"]              = WiFi.localIP().toString();
 
     String body;
     serializeJson(doc, body);
@@ -231,6 +232,7 @@ void publishHeartbeat() {
     doc["status"]   = "ONLINE";
     doc["firmware"] = FW_VERSION;
     doc["uptime"]   = millis() / 1000;
+    doc["ip"]       = WiFi.localIP().toString();
 
     String msg;
     serializeJson(doc, msg);

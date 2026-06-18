@@ -36,6 +36,7 @@ model Device {
   deviceName      String
   deviceType      String
   firmwareVersion String
+  ipAddress       String?
   lastSeen        DateTime  @default(now())
   createdAt       DateTime  @default(now())
 

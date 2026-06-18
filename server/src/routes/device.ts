@@ -8,13 +8,14 @@ export async function deviceRoutes(app: FastifyInstance) {
         deviceName: string;
         deviceType: string;
         firmwareVersion: string;
+        ip?: string;
     } }>('/register', async (req, reply) => {
-        const { deviceId, deviceName, deviceType, firmwareVersion } = req.body;
+        const { deviceId, deviceName, deviceType, firmwareVersion, ip } = req.body;
 
         const device = await db.device.upsert({
-            where: { deviceId },
-            update: { deviceName, deviceType, firmwareVersion, lastSeen: new Date() },
-            create: { deviceId, deviceName, deviceType, firmwareVersion },
+            where:  { deviceId },
+            update: { deviceName, deviceType, firmwareVersion, lastSeen: new Date(), ...(ip ? { ipAddress: ip } : {}) },
+            create: { deviceId, deviceName, deviceType, firmwareVersion, ...(ip ? { ipAddress: ip } : {}) },
         });
 
         return reply.code(200).send({ id: device.id, deviceId: device.deviceId });
@@ -27,13 +28,14 @@ export async function deviceRoutes(app: FastifyInstance) {
         firmwareVersion?: string;
         status?: string;
     } }>('/heartbeat', async (req, reply) => {
-        const { deviceId, firmwareVersion } = req.body;
+        const { deviceId, ip, firmwareVersion } = req.body;
 
         await db.device.update({
             where: { deviceId },
             data: {
                 lastSeen: new Date(),
                 ...(firmwareVersion ? { firmwareVersion } : {}),
+                ...(ip             ? { ipAddress: ip }   : {}),
             },
         });
 

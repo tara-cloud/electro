@@ -1165,6 +1165,7 @@ function renderHealth(d) {
     <div class="card"><h3>Device Info</h3><table>
       <tr><th>Device ID</th><td><code>${d.deviceId}</code></td></tr>
       <tr><th>Type</th><td><span class="badge type">${d.deviceType}</span></td></tr>
+      ${d.ipAddress ? `<tr><th>IP Address</th><td><code>${d.ipAddress}</code></td></tr>` : ''}
       <tr><th>Registered</th><td>${new Date(d.createdAt).toLocaleString()}</td></tr>
     </table></div>
     ${r ? buildSensorCard(r) : ''}`;

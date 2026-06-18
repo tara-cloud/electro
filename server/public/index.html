@@ -504,18 +504,12 @@ async function selectDevice(id) {
       <div class="tab active" onclick="switchTab('health')">Health</div>
       <div class="tab" onclick="switchTab('config')">Config</div>
       <div class="tab" onclick="switchTab('hardware')">Hardware</div>
-      <div class="tab" onclick="switchTab('pipeline')">Pipeline</div>
-      <div class="tab" onclick="switchTab('faces')">Faces</div>
       <div class="tab" onclick="switchTab('control')">Control</div>
-      <div class="tab" onclick="switchTab('sensors')">Sensors</div>
     </div>
     <div id="tab-health"   class="tab-content active"></div>
     <div id="tab-config"   class="tab-content"></div>
     <div id="tab-hardware" class="tab-content"></div>
-    <div id="tab-pipeline" class="tab-content"></div>
-    <div id="tab-faces"    class="tab-content"></div>
     <div id="tab-control"  class="tab-content"></div>
-    <div id="tab-sensors"  class="tab-content"></div>
   `;
 
   const [d, pins] = await Promise.all([
@@ -527,14 +521,11 @@ async function selectDevice(id) {
   renderHealth(d);
   renderConfig(id, d);
   renderHardware(id, pins);
-  renderPipeline(id, pins);
-  renderFaces(id);
   renderControl(id);
-  renderSensors(d.readings || []);
 }
 
 function switchTab(name) {
-  const names = ['health','config','hardware','pipeline','faces','control','sensors'];
+  const names = ['health','config','hardware','control'];
   document.querySelectorAll('.tab').forEach((t,i) => t.classList.toggle('active', names[i]===name));
   document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
   document.getElementById('tab-'+name).classList.add('active');
@@ -570,11 +561,6 @@ function renderHealth(d) {
 
 // ── Tab: Config ────────────────────────────────────────────────────────────
 function renderConfig(deviceId, device) {
-  const latestCfg = (device.configs || [])[0]?.config ?? {};
-  const cfgJson   = JSON.stringify(
-    Object.fromEntries(Object.entries(latestCfg).filter(([k]) => k !== 'faces' && k !== 'version')),
-    null, 2
-  );
 
   document.getElementById('tab-config').innerHTML = `
     <div class="card">
@@ -594,19 +580,7 @@ function renderConfig(deviceId, device) {
         <p style="font-size:.72rem;color:var(--muted)">
           Device type is used for OTA targeting from Pocket — all devices of the same type receive firmware updates together.
         </p>
-        <button class="btn btn-primary btn-sm" onclick="saveDeviceIdentity('${deviceId}')">Save Identity</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <h3>Runtime Config</h3>
-      <p style="font-size:.72rem;color:var(--muted);margin-bottom:10px">
-        Pushed to device via MQTT on save. The <code>faces</code> map is injected automatically.
-      </p>
-      <textarea id="dev-config-editor" style="height:200px">${cfgJson || '{\n  "displayBrightness": 128,\n  "volume": 70,\n  "idleTimeout": 300\n}'}</textarea>
-      <div style="display:flex;gap:8px;margin-top:10px">
-        <button class="btn btn-primary" onclick="pushDeviceConfig('${deviceId}')">Save &amp; Push to Device</button>
-        <button class="btn btn-ghost" onclick="fmtDeviceConfig()">Format JSON</button>
+        <button class="btn btn-primary btn-sm" onclick="saveDeviceIdentity('${deviceId}')">Save</button>
       </div>
     </div>
 
@@ -740,7 +714,7 @@ async function savePin(deviceId) {
   try {
     await api('POST',`/robot/${deviceId}/pins`,{pin,label,direction,component,protocol,notes});
     toast('Pin saved'); devicePins=await api('GET',`/robot/${deviceId}/pins`);
-    renderHardware(deviceId,devicePins); renderPipeline(deviceId,devicePins);
+    renderHardware(deviceId,devicePins);
   } catch(e){toast(`Error: ${e.message}`,false);}
 }
 async function deletePin(deviceId,pin) {
@@ -749,153 +723,6 @@ async function deletePin(deviceId,pin) {
     await api('DELETE',`/robot/${deviceId}/pins/${encodeURIComponent(pin)}`);
     toast('Pin removed'); devicePins=await api('GET',`/robot/${deviceId}/pins`);
     renderHardware(deviceId,devicePins);
-  } catch(e){toast(`Error: ${e.message}`,false);}
-}
-
-// ── Tab: Pipeline ──────────────────────────────────────────────────────────
-async function renderPipeline(deviceId, pins) {
-  const rules=await api('GET',`/robot/${deviceId}/pipeline`);
-  const el=document.getElementById('tab-pipeline');
-  el.innerHTML=`
-    <div class="card">
-      <h3 style="display:flex;align-items:center;justify-content:space-between">
-        Pipeline Rules
-        <button class="btn btn-primary btn-sm" onclick="showAddRule('${deviceId}')">+ Add Rule</button>
-      </h3>
-      ${rules.length===0?'<p style="color:var(--muted);font-size:.8rem">No rules yet.</p>':`
-      <table><thead><tr><th>Label</th><th>Action</th><th>Config</th><th>Enabled</th><th></th></tr></thead><tbody>
-        ${rules.map(r=>{
-          const cfg = r.config;
-          let s;
-          if (r.action === 'threshold')    s = `${cfg.field}${cfg.operator}${cfg.value}→${cfg.mqttTopic}`;
-          else if (r.action === 'mqtt_publish') s = `→${cfg.topic}`;
-          else if (r.action === 'actuator')    s = `${cfg.pinLabel}=${cfg.value}`;
-          else                                 s = 'log';
-          return `<tr><td><strong>${r.pinLabel}</strong></td><td><code>${r.action}</code></td><td style="font-size:.72rem;color:var(--muted)">${s}</td>
-          <td><label class="toggle"><input type="checkbox" ${r.enabled?'checked':''} onchange="toggleRule('${deviceId}','${r.id}',this.checked)"><span class="slider"></span></label></td>
-          <td><button class="btn btn-danger btn-sm" onclick="deleteRule('${deviceId}','${r.id}')">✕</button></td></tr>`;
-        }).join('')}
-      </tbody></table>`}
-    </div>
-    <div id="add-rule-form"></div>`;
-}
-function showAddRule(deviceId) {
-  const pinOpts=devicePins.map(p=>`<option value="${p.label}">${p.label} (${p.component})</option>`).join('');
-  document.getElementById('add-rule-form').innerHTML=`
-    <div class="pipeline-form">
-      <h3>Add Rule</h3>
-      <div class="row">
-        <div><label>Pin / Label</label><select id="nr-pin">${pinOpts}</select></div>
-        <div><label>Action</label><select id="nr-action" onchange="updateRuleForm()">
-          <option value="log">Log to DB</option><option value="threshold">Threshold → MQTT</option>
-          <option value="mqtt_publish">Publish to MQTT</option><option value="actuator">Trigger Actuator</option>
-        </select></div>
-      </div>
-      <div id="nr-extra"></div>
-      <div style="display:flex;gap:8px">
-        <button class="btn btn-primary" onclick="saveRule('${deviceId}')">Save</button>
-        <button class="btn btn-ghost" onclick="document.getElementById('add-rule-form').innerHTML=''">Cancel</button>
-      </div>
-    </div>`;
-  updateRuleForm();
-}
-function updateRuleForm() {
-  const action=document.getElementById('nr-action').value, el=document.getElementById('nr-extra');
-  if (action==='log'){el.innerHTML='<p style="font-size:.75rem;color:var(--muted)">Readings saved to DB automatically.</p>';return;}
-  if (action==='threshold'){el.innerHTML=`
-    <div class="row"><input id="nr-field2" placeholder="field (e.g. temperature)" />
-    <select id="nr-op"><option>></option><option><</option><option>>=</option><option><=</option><option>==</option></select>
-    <input id="nr-thresh" type="number" placeholder="value" /></div>
-    <div class="row"><div><label>MQTT Topic</label><input id="nr-topic" placeholder="tara/robot/…/display" /></div>
-    <div><label>Payload JSON</label><input id="nr-payload" placeholder='{"face":"error"}' /></div></div>`;return;}
-  if (action==='mqtt_publish'){el.innerHTML=`<div><label>Topic</label><input id="nr-fwd-topic" placeholder="home/sensors/…" /></div>`;return;}
-  const outPins=devicePins.filter(p=>p.direction==='output').map(p=>`<option value="${p.label}">${p.label}</option>`).join('');
-  el.innerHTML=`<div class="row"><div><label>Output Pin</label><select id="nr-act-pin">${outPins||'<option>No output pins</option>'}</select></div>
-    <div><label>Value</label><input id="nr-act-val" placeholder="1/0/HIGH/LOW" /></div></div>`;
-}
-async function saveRule(deviceId) {
-  const action=document.getElementById('nr-action').value, pinLabel=document.getElementById('nr-pin').value;
-  let config={};
-  if (action==='threshold'){
-    const field=document.getElementById('nr-field2').value.trim(), op=document.getElementById('nr-op').value;
-    const thresh=Number.parseFloat(document.getElementById('nr-thresh').value), topic=document.getElementById('nr-topic').value.trim();
-    const payload=document.getElementById('nr-payload').value.trim();
-    if(!field||!topic||!payload){toast('Fill all fields',false);return;}
-    try{config={field,operator:op,value:thresh,mqttTopic:topic,mqttPayload:JSON.parse(payload)};}catch{toast('Payload must be JSON',false);return;}
-  } else if (action==='mqtt_publish') { config={topic:document.getElementById('nr-fwd-topic').value.trim()};
-  } else if (action==='actuator') { config={pinLabel:document.getElementById('nr-act-pin').value,value:document.getElementById('nr-act-val').value}; }
-  try { await api('POST',`/robot/${deviceId}/pipeline`,{pinLabel,action,config}); toast('Rule saved'); renderPipeline(deviceId,devicePins);
-  } catch(e){toast(`Error: ${e.message}`,false);}
-}
-async function toggleRule(deviceId,id,enabled) { try{await api('PATCH',`/robot/${deviceId}/pipeline/${id}`,{enabled});}catch(e){toast(`Error: ${e.message}`,false);} }
-async function deleteRule(deviceId,id) {
-  try { await api('DELETE',`/robot/${deviceId}/pipeline/${id}`); toast('Rule deleted'); renderPipeline(deviceId,devicePins);
-  } catch(e){toast(`Error: ${e.message}`,false);}
-}
-
-// ── Tab: Faces ─────────────────────────────────────────────────────────────
-async function renderFaces(deviceId) {
-  const faces=await api('GET','/faces');
-  document.getElementById('tab-faces').innerHTML=`
-    <div class="card">
-      <h3 style="display:flex;align-items:center;justify-content:space-between">Face Library
-        <div style="display:flex;gap:8px">
-          <button class="btn btn-ghost btn-sm" onclick="pushFaces('${deviceId}')">↑ Push All</button>
-          <button class="btn btn-primary btn-sm" onclick="showNewFaceForm()">+ New</button>
-        </div>
-      </h3>
-      <div id="face-list">${faces.map(f=>faceCard(f)).join('')}</div>
-    </div>
-    <div id="new-face-form"></div>`;
-}
-function faceCard(f) {
-  return `<div class="pipeline-form" id="face-card-${f.name}" style="margin-bottom:10px">
-    <div style="display:flex;align-items:center;gap:8px">
-      <strong>${f.label}</strong><code style="font-size:.7rem">${f.name}</code>
-      <span style="margin-left:auto;display:flex;gap:5px">
-        <button class="btn btn-ghost btn-sm" onclick="previewFace('${f.name}')">Preview</button>
-        <button class="btn btn-primary btn-sm" onclick="saveFace('${f.name}')">Save</button>
-        <button class="btn btn-danger btn-sm" onclick="deleteFace('${f.name}')">✕</button>
-      </span>
-    </div>
-    <textarea id="face-editor-${f.name}" style="height:140px">${JSON.stringify(f.cmds,null,2)}</textarea>
-  </div>`;
-}
-function showNewFaceForm() {
-  document.getElementById('new-face-form').innerHTML=`
-    <div class="pipeline-form">
-      <h3>New Face</h3>
-      <div class="row"><div><label>Name (id)</label><input id="nf-name" placeholder="e.g. wink" /></div><div><label>Label</label><input id="nf-label" placeholder="e.g. Wink" /></div></div>
-      <textarea id="nf-cmds" style="height:130px">[\n  {"t":"disc","x":38,"y":26,"r":9},\n  {"t":"disc","x":90,"y":26,"r":9}\n]</textarea>
-      <div style="display:flex;gap:8px">
-        <button class="btn btn-primary" onclick="createFace()">Create</button>
-        <button class="btn btn-ghost" onclick="document.getElementById('new-face-form').innerHTML=''">Cancel</button>
-      </div>
-    </div>`;
-}
-async function saveFace(name) {
-  let cmds; try{cmds=JSON.parse(document.getElementById(`face-editor-${name}`).value);}catch{toast('Invalid JSON',false);return;}
-  try{await api('PUT',`/faces/${name}`,{cmds});toast(`Face '${name}' saved`);}catch(e){toast(`Error: ${e.message}`,false);}
-}
-async function createFace() {
-  const name=document.getElementById('nf-name').value.trim(), label=document.getElementById('nf-label').value.trim()||name;
-  let cmds; try{cmds=JSON.parse(document.getElementById('nf-cmds').value);}catch{toast('Invalid JSON',false);return;}
-  try{await api('PUT',`/faces/${name}`,{label,cmds});toast(`Face created`);renderFaces(selected);}catch(e){toast(`Error: ${e.message}`,false);}
-}
-async function deleteFace(name) {
-  if(!confirm(`Delete '${name}'?`))return;
-  try{await api('DELETE',`/faces/${name}`);toast('Deleted');renderFaces(selected);}catch(e){toast(`Error: ${e.message}`,false);}
-}
-async function previewFace(name) {
-  try{await api('POST',`/robot/${selected}/display`,{face:name});toast(`Previewing '${name}'`);}catch(e){toast(`Error: ${e.message}`,false);}
-}
-async function pushFaces(deviceId) {
-  try {
-    const last=await api('GET',`/robot/${deviceId}`);
-    const lastCfg=(last.configs||[])[0]?.config||{};
-    const rest=Object.fromEntries(Object.entries(lastCfg).filter(([k])=>k!=='faces'&&k!=='version'));
-    await api('PUT',`/robot/${deviceId}/config`,rest);
-    toast('Faces pushed via config');
   } catch(e){toast(`Error: ${e.message}`,false);}
 }
 
@@ -935,19 +762,6 @@ async function sendSpeech(id) {
 async function pushConfig(id){let cfg;try{cfg=JSON.parse(document.getElementById('config-editor').value);}catch{toast('Invalid JSON',false);return;}try{const r=await api('PUT',`/robot/${id}/config`,cfg);toast(`Config v${r.version} pushed`);}catch(e){toast(`Error: ${e.message}`,false);}}
 function fmtConfig(){const el=document.getElementById('config-editor');try{el.value=JSON.stringify(JSON.parse(el.value),null,2);}catch{toast('Invalid JSON',false);}}
 
-// ── Tab: Sensors ───────────────────────────────────────────────────────────
-function renderSensors(readings) {
-  document.getElementById('tab-sensors').innerHTML=`
-    <div class="card"><h3>Sensor History</h3>
-      ${readings.length===0?'<p style="color:var(--muted);font-size:.82rem">No readings yet.</p>':`
-      <table><thead><tr><th>Time</th><th>Temp (°C)</th><th>Humidity (%)</th><th>Light (%)</th></tr></thead><tbody>
-        ${readings.map(r=>`<tr>
-          <td style="color:var(--muted);font-size:.72rem">${ago(r.recordedAt)}</td>
-          <td>${r.temperature??'—'}</td><td>${r.humidity??'—'}</td><td>${r.light??'—'}</td>
-        </tr>`).join('')}
-      </tbody></table>`}
-    </div>`;
-}
 
 // ── Live pin polling ───────────────────────────────────────────────────────
 async function pollPinState() {

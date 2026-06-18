@@ -160,8 +160,12 @@ export async function robotRoutes(app: FastifyInstance) {
         const pocketToken = process.env.POCKET_TOKEN ?? '';
 
         const res = await fetch(`${pocketUrl}/api/ota/${otaReleaseId}/push`, {
-            method: 'POST',
-            headers: pocketToken ? { 'X-Pocket-Token': pocketToken } : {},
+            method:  'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                ...(pocketToken ? { 'X-Pocket-Token': pocketToken } : {}),
+            },
+            body: '{}',
         }).catch(() => null);
 
         if (res?.ok !== true) {

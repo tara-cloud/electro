@@ -416,20 +416,45 @@ function renderMiddle(proj) {
 
     <div id="assign-form-${proj.id}"></div>
   `;
+
+  // Fetch and fill health snippets for each device card (non-blocking)
+  if (proj.devices) {
+    for (const d of proj.devices) loadDeviceHealthCard(d.deviceId);
+  }
+}
+
+async function loadDeviceHealthCard(deviceId) {
+  try {
+    const d = await api('GET', `/robot/${deviceId}`);
+    const el = document.getElementById(`dev-health-${deviceId}`);
+    if (!el) return;
+    const r = (d.readings || [])[0];
+    const parts = [];
+    if (r?.temperature != null) parts.push(`🌡 ${r.temperature}°C`);
+    if (r?.humidity    != null) parts.push(`💧 ${r.humidity}%`);
+    if (r?.light       != null) parts.push(`☀ ${r.light}%`);
+    if (parts.length) el.textContent = parts.join('  ');
+  } catch { /* offline */ }
 }
 
 function deviceCard(d, showUnassign, projId) {
   const online = isOnline(d.lastSeen);
+  const lastSeenStr = ago(d.lastSeen);
   return `
     <div class="dev-card ${selected===d.deviceId?'active':''}" onclick="selectDevice('${d.deviceId}')">
-      <div class="dname">${d.deviceName}</div>
-      <div class="did">${d.deviceId}</div>
-      <div class="dmeta">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div class="dname">${d.deviceName}</div>
+        ${showUnassign ? `<button class="btn btn-danger btn-sm" onclick="event.stopPropagation();unassignDevice('${projId}','${d.deviceId}')">✕</button>` : ''}
+      </div>
+      <div class="dmeta" style="margin-top:5px">
         <span class="badge ${online?'online':'offline'}">${online?'ONLINE':'OFFLINE'}</span>
         <span class="badge type">${d.deviceType}</span>
         <span style="font-size:.68rem;color:var(--muted)">v${d.firmwareVersion}</span>
-        ${showUnassign ? `<button class="btn btn-danger btn-sm" style="margin-left:auto" onclick="event.stopPropagation();unassignDevice('${projId}','${d.deviceId}')">✕</button>` : ''}
       </div>
+      <div style="font-size:.7rem;color:var(--muted);margin-top:4px">
+        Last seen ${lastSeenStr}
+      </div>
+      <div id="dev-health-${d.deviceId}" style="font-size:.72rem;color:var(--muted);margin-top:4px"></div>
     </div>`;
 }
 

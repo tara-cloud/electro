@@ -10,6 +10,26 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model Project {
+  id          String    @id @default(cuid())
+  name        String    @unique
+  description String    @default("")
+  createdAt   DateTime  @default(now())
+  devices     Device[]
+  services    Service[]
+}
+
+model Service {
+  id          String   @id @default(cuid())
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId   String
+  name        String
+  description String   @default("")
+  url         String   @default("")
+  status      String   @default("unknown") // online | offline | unknown
+  createdAt   DateTime @default(now())
+}
+
 model Device {
   id              String    @id @default(cuid())
   deviceId        String    @unique
@@ -18,6 +38,9 @@ model Device {
   firmwareVersion String
   lastSeen        DateTime  @default(now())
   createdAt       DateTime  @default(now())
+
+  project   Project?  @relation(fields: [projectId], references: [id])
+  projectId String?
 
   configs   DeviceConfig[]
   readings  SensorReading[]
@@ -51,11 +74,11 @@ model DevicePin {
   id        String  @id @default(cuid())
   device    Device  @relation(fields: [deviceId], references: [deviceId])
   deviceId  String
-  pin       String  // GPIO number or label like "3V3", "GND"
-  label     String  // e.g. "SDA", "SOIL_MOISTURE", "PUMP"
-  direction String  // "input" | "output" | "power" | "i2c"
-  component String  // e.g. "SH1106 OLED", "DHT11"
-  protocol  String? // "I2C" | "DIGITAL" | "ANALOG" | "PWM"
+  pin       String
+  label     String
+  direction String
+  component String
+  protocol  String?
   notes     String?
 
   @@unique([deviceId, pin])
@@ -65,21 +88,18 @@ model PipelineRule {
   id        String   @id @default(cuid())
   device    Device   @relation(fields: [deviceId], references: [deviceId])
   deviceId  String
-  pinLabel  String   // matches DevicePin.label
-  action    String   // "log" | "threshold" | "mqtt_publish" | "actuator"
-  config    Json     // action-specific config
+  pinLabel  String
+  action    String
+  config    Json
   enabled   Boolean  @default(true)
   createdAt DateTime @default(now())
 }
 
-// Face — a named drawing stored as a JSON command list.
-// The device fetches all faces at startup via config and renders them at runtime.
-// name is global (shared across all devices of the same type).
 model Face {
   id        String   @id @default(cuid())
-  name      String   @unique  // e.g. "idle", "happy", "thinking"
-  label     String            // human-readable display label
-  cmds      Json              // array of draw commands
+  name      String   @unique
+  label     String
+  cmds      Json
   updatedAt DateTime @updatedAt
   createdAt DateTime @default(now())
 }

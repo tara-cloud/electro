@@ -8,6 +8,7 @@ import { sensorRoutes } from './routes/sensor';
 import { robotRoutes }    from './routes/robot';
 import { hardwareRoutes } from './routes/hardware';
 import { faceRoutes, seedFaces } from './routes/face';
+import { projectRoutes } from './routes/project';
 import { initMqtt } from './mqtt';
 
 const app = Fastify({ logger: true });
@@ -26,8 +27,9 @@ app.register(sensorRoutes, { prefix: '/device' });
 app.register(robotRoutes,    { prefix: '/robot' });
 app.register(hardwareRoutes, { prefix: '/robot' });
 app.register(faceRoutes,     { prefix: '/faces' });
+app.register(projectRoutes,  { prefix: '/projects' });
 
-app.get('/health', async () => ({ status: 'ok' }));
+app.get('/health', async () => ({ status: 'ok', service: 'electro' }));
 
 initMqtt();
 seedFaces();

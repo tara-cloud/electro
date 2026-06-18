@@ -27,6 +27,29 @@ static const char* PREF_WIFI   = "tara-wifi";
 static const char* PREF_CONFIG = "tara-device";
 static const char* AP_PASSWORD = "12345678";
 
+// ─── Runtime discovered component (populated by discoverComponents()) ────────
+struct DiscoveredPin {
+    String pin;
+    String label;
+    String direction;
+};
+
+struct DiscoveredComponent {
+    String name;
+    String type;
+    String protocol;
+    uint8_t address;            // I2C address (0 = not I2C)
+    DiscoveredPin pins[4];
+    int pinCount;
+};
+
+static const int MAX_COMPONENTS = 8;
+extern DiscoveredComponent discoveredComponents[];
+extern int                 discoveredComponentCount;
+
+// Called from setupDeviceHardware() before peripheral init
+void discoverComponents(int sdaPin, int sclPin);
+
 // ─── Globals (defined in main.cpp) ───────────────────────────────────────────
 extern String     robotId;
 extern String     wifiSSID;

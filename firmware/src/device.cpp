@@ -118,6 +118,9 @@ void tlog(const String& msg) {
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 void setupDeviceHardware() {
+    // Scan I2C before u8g2 takes the bus (Wire.end() is called inside)
+    discoverComponents(I2C_SDA, I2C_SCL);
+
     u8g2.begin();
     u8g2.setContrast((uint8_t)displayBrightness);
     redrawBootScreen();

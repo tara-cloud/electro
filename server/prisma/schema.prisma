@@ -43,10 +43,11 @@ model Device {
   project   Project?  @relation(fields: [projectId], references: [id])
   projectId String?
 
-  configs   DeviceConfig[]
-  readings  SensorReading[]
-  pins      DevicePin[]
-  pipeline  PipelineRule[]
+  configs     DeviceConfig[]
+  readings    SensorReading[]
+  components  DeviceComponent[]
+  pins        DevicePin[]
+  pipeline    PipelineRule[]
 }
 
 model DeviceConfig {
@@ -71,16 +72,27 @@ model SensorReading {
   recordedAt  DateTime @default(now())
 }
 
-model DevicePin {
-  id        String  @id @default(cuid())
-  device    Device  @relation(fields: [deviceId], references: [deviceId])
+model DeviceComponent {
+  id        String      @id @default(cuid())
+  device    Device      @relation(fields: [deviceId], references: [deviceId])
   deviceId  String
-  pin       String
-  label     String
-  direction String
-  component String
+  name      String
+  type      String
   protocol  String?
-  notes     String?
+  address   String?
+  pins      DevicePin[]
+
+  @@unique([deviceId, name])
+}
+
+model DevicePin {
+  id          String          @id @default(cuid())
+  component   DeviceComponent @relation(fields: [componentId], references: [id], onDelete: Cascade)
+  componentId String
+  deviceId    String
+  pin         String
+  label       String
+  direction   String
 
   @@unique([deviceId, pin])
 }

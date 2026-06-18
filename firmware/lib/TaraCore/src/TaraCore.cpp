@@ -3,6 +3,77 @@
 #include <HTTPClient.h>
 #include <WebServer.h>
 #include <DNSServer.h>
+#include <Wire.h>
+
+// ─── Component discovery ──────────────────────────────────────────────────────
+
+DiscoveredComponent discoveredComponents[MAX_COMPONENTS];
+int                 discoveredComponentCount = 0;
+
+struct KnownI2CDevice {
+    uint8_t     addr;
+    const char* name;
+    const char* type;       // "output" | "input" | "io"
+    // pin labels: index 0 = SDA, 1 = SCL
+};
+
+static const KnownI2CDevice KNOWN_I2C[] = {
+    { 0x3C, "OLED",   "output" },   // SSD1306 / SH1106 (most common addr)
+    { 0x3D, "OLED",   "output" },   // SSD1306 / SH1106 (alt addr)
+    { 0x68, "MPU6050","io"     },   // gyro/accel
+    { 0x69, "MPU6050","io"     },
+    { 0x76, "BME280", "input"  },   // temp/humidity/pressure
+    { 0x77, "BME280", "input"  },
+    { 0x40, "INA219", "input"  },   // current/voltage sensor
+    { 0x27, "LCD",    "output" },   // PCF8574 I2C LCD backpack
+    { 0x3F, "LCD",    "output" },
+};
+static const int KNOWN_I2C_COUNT = sizeof(KNOWN_I2C) / sizeof(KNOWN_I2C[0]);
+
+void discoverComponents(int sdaPin, int sclPin) {
+    discoveredComponentCount = 0;
+
+    Wire.begin(sdaPin, sclPin);
+    tlog("Scanning I2C...");
+    Serial.printf("[Discovery] I2C scan SDA=%d SCL=%d\n", sdaPin, sclPin);
+
+    for (uint8_t addr = 1; addr < 127 && discoveredComponentCount < MAX_COMPONENTS; addr++) {
+        Wire.beginTransmission(addr);
+        if (Wire.endTransmission() != 0) continue;
+
+        Serial.printf("[Discovery] Found 0x%02X\n", addr);
+
+        DiscoveredComponent& c = discoveredComponents[discoveredComponentCount++];
+        c.address  = addr;
+        c.protocol = "I2C";
+        c.pinCount = 2;
+        c.pins[0]  = { "GPIO" + String(sdaPin), "SDA", "io"     };
+        c.pins[1]  = { "GPIO" + String(sclPin), "SCL", "output" };
+
+        // Match against known-device table
+        bool matched = false;
+        for (int k = 0; k < KNOWN_I2C_COUNT; k++) {
+            if (KNOWN_I2C[k].addr == addr) {
+                c.name = KNOWN_I2C[k].name;
+                c.type = KNOWN_I2C[k].type;
+                matched = true;
+                break;
+            }
+        }
+        if (!matched) {
+            char buf[12];
+            snprintf(buf, sizeof(buf), "0x%02X", addr);
+            c.name = String("Unknown(") + buf + ")";
+            c.type = "io";
+        }
+
+        tlog(c.name + "@0x" + String(addr, HEX));
+        Serial.printf("[Discovery] → %s (%s)\n", c.name.c_str(), c.type.c_str());
+    }
+
+    Wire.end();
+    Serial.printf("[Discovery] Done — %d component(s)\n", discoveredComponentCount);
+}
 
 // ─── WiFi ────────────────────────────────────────────────────────────────────
 
@@ -160,6 +231,24 @@ void registerRobot() {
     doc["deviceType"]      = DEVICE_TYPE;
     doc["firmwareVersion"] = FW_VERSION;
     doc["ip"]              = WiFi.localIP().toString();
+
+    JsonArray components = doc["components"].to<JsonArray>();
+    for (int i = 0; i < discoveredComponentCount; i++) {
+        const DiscoveredComponent& c = discoveredComponents[i];
+        JsonObject co = components.add<JsonObject>();
+        co["name"]     = c.name;
+        co["type"]     = c.type;
+        co["protocol"] = c.protocol;
+        if (c.address) co["address"] = String("0x") + String(c.address, HEX);
+
+        JsonArray pins = co["pins"].to<JsonArray>();
+        for (int j = 0; j < c.pinCount; j++) {
+            JsonObject po = pins.add<JsonObject>();
+            po["pin"]       = c.pins[j].pin;
+            po["label"]     = c.pins[j].label;
+            po["direction"] = c.pins[j].direction;
+        }
+    }
 
     String body;
     serializeJson(doc, body);

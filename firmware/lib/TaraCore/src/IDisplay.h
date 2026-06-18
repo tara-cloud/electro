@@ -1,4 +1,5 @@
 #pragma once
+#include <Arduino.h>
 
 /**
  * IDisplay — display hardware abstraction layer.

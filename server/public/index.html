@@ -143,9 +143,9 @@
     #toast { position:fixed; bottom:18px; right:18px; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:8px 14px; font-size:.8rem; opacity:0; transition:opacity .2s; pointer-events:none; z-index:100; }
     #toast.show { opacity:1; }
     /* ── Modal popup ──── */
-    #modal-backdrop { display:none; position:fixed; inset:0; background:rgba(0,0,0,.6); backdrop-filter:blur(6px); z-index:200; align-items:center; justify-content:center; }
-    #modal-backdrop.open { display:flex; }
-    dialog#modal-box { background:var(--surface); border:1px solid var(--border); border-radius:12px; width:min(560px,92vw); max-height:85vh; display:flex; flex-direction:column; box-shadow:0 24px 64px rgba(0,0,0,.5); padding:0; margin:0; color:var(--text); }
+    #modal-backdrop { display:none; position:fixed; inset:0; background:rgba(0,0,0,.6); backdrop-filter:blur(6px); z-index:200; }
+    #modal-backdrop.open { display:flex; align-items:center; justify-content:center; }
+    dialog#modal-box { background:var(--surface); border:1px solid var(--border); border-radius:12px; width:min(560px,92vw); max-height:85vh; display:flex; flex-direction:column; box-shadow:0 24px 64px rgba(0,0,0,.5); padding:0; margin:auto; color:var(--text); position:relative; }
     #modal-header { display:flex; align-items:center; justify-content:space-between; padding:14px 18px; border-bottom:1px solid var(--border); flex-shrink:0; }
     #modal-header h2 { font-size:.95rem; font-weight:600; }
     #modal-close { background:none; border:none; color:var(--muted); font-size:1.2rem; cursor:pointer; padding:0 4px; line-height:1; }

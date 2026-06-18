@@ -578,8 +578,13 @@ function deleteQueue(projId, name) {
 function queueCard(q, projId) {
   const fieldCount = (q.schema || []).length;
   const topic = q.topic || `tara/${projId}/${q.name}`;
+  const ttBadge = {
+    publish:   '<span class="badge" style="background:#1a2e1a;color:#86efac;font-size:.6rem">PUB</span>',
+    subscribe: '<span class="badge" style="background:#1a1e3a;color:#93c5fd;font-size:.6rem">SUB</span>',
+    both:      '<span class="badge" style="background:#2a1a2a;color:#d8b4fe;font-size:.6rem">PUB+SUB</span>',
+  }[q.topicType || 'publish'] ?? '';
   return `<div class="comp-card" onclick="openQueueDetail('${projId}','${q.name}')">
-    <div class="cname">${q.name}</div>
+    <div class="cname" style="display:flex;align-items:center;gap:6px">${q.name} ${ttBadge}</div>
     <div class="cmeta">
       <code style="font-size:.7rem">${topic}</code>
       <span style="font-size:.7rem;color:var(--muted)">${fieldCount} field${fieldCount === 1 ? '' : 's'}</span>
@@ -598,8 +603,9 @@ function showCreateQueue(projId) {
 }
 
 function buildQueueForm(projId, existing) {
-  const isEdit = !!existing;
-  const fields = isEdit ? (existing.schema || []) : _editQueueFields;
+  const isEdit   = !!existing;
+  const fields   = isEdit ? (existing.schema || []) : _editQueueFields;
+  const curType  = isEdit ? (existing.topicType || 'publish') : 'publish';
   _editQueueFields = fields;
 
   const fieldRows = fields.map((f, i) => `
@@ -635,9 +641,16 @@ function buildQueueForm(projId, existing) {
       <div><label>MQTT Topic</label>
         <input id="qf-topic" value="${isEdit?existing.topic||'':''}" placeholder="tara/${projId}/queue-name" />
       </div>
-      <div><label>Description</label>
-        <input id="qf-desc" value="${isEdit?existing.description||'':''}" placeholder="Optional" />
+      <div><label>Topic Type</label>
+        <select id="qf-topictype" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:6px 10px;font-size:.82rem;width:100%">
+          <option value="publish"   ${curType==='publish'  ?'selected':''}>Publish — device sends data</option>
+          <option value="subscribe" ${curType==='subscribe'?'selected':''}>Subscribe — device receives commands</option>
+          <option value="both"      ${curType==='both'     ?'selected':''}>Both</option>
+        </select>
       </div>
+    </div>
+    <div><label>Description</label>
+      <input id="qf-desc" value="${isEdit?existing.description||'':''}" placeholder="Optional" />
     </div>
 
     <div>
@@ -689,15 +702,16 @@ function saveQueueForm(projId, existingName) {
   const name  = isExisting(existingName)
     ? existingName
     : document.getElementById('qf-name')?.value.trim();
-  const topic = document.getElementById('qf-topic')?.value.trim();
-  const desc  = document.getElementById('qf-desc')?.value.trim();
+  const topic     = document.getElementById('qf-topic')?.value.trim();
+  const desc      = document.getElementById('qf-desc')?.value.trim();
+  const topicType = document.getElementById('qf-topictype')?.value || 'publish';
   if (!name) { toast('Queue name required', false); return; }
 
   const schema = _editQueueFields
     .filter(f => f.fieldName.trim())
     .map(f => ({ ...f, fieldName: f.fieldName.trim() }));
 
-  saveQueue(projId, { name, topic: topic || `tara/${projId}/${name}`, description: desc, schema });
+  saveQueue(projId, { name, topic: topic || `tara/${projId}/${name}`, topicType, description: desc, schema });
   toast(`Queue "${name}" saved`);
   if (isExisting(existingName)) {
     // Editing from detail overlay — re-render detail
@@ -875,12 +889,22 @@ function buildQueueOverview(inputQueues, outputQueues) {
 
 function renderServiceDetail(svcId, state) {
   const { inputQueues, outputQueues } = collectQueues(_svcDevices);
+  const allQueues = getProjectQueues(_activeProjId || '');
+
+  // Grouped queue overview
+  const qOverview = buildQueueOverview(inputQueues, outputQueues);
+
+  // Rules
+  const rulesHtml = (state.rules || []).length
+    ? (state.rules || []).map((r, i) => ruleRow(svcId, r, i, allQueues)).join('')
+    : '<p style="color:var(--muted);font-size:.75rem">No rules yet.</p>';
 
   const el = document.getElementById('svc-detail');
   el.innerHTML = `
     <div style="padding:10px;display:flex;flex-direction:column;gap:14px">
-      ${buildQueueOverview(inputQueues, outputQueues)}
-      <!-- Components / Inputs -->
+      ${qOverview}
+
+      <!-- Mapped I/O -->
       <div>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
           <span class="section-title" style="margin:0">Input Components</span>
@@ -892,8 +916,6 @@ function renderServiceDetail(svcId, state) {
               : '<p style="color:var(--muted);font-size:.75rem">No input components mapped.</p>'}
         </div>
       </div>
-
-      <!-- Components / Outputs -->
       <div>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
           <span class="section-title" style="margin:0">Output Components</span>
@@ -910,157 +932,40 @@ function renderServiceDetail(svcId, state) {
       <div>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
           <span class="section-title" style="margin:0">Rules</span>
-          <button class="btn btn-ghost btn-sm" onclick="addRule('${svcId}')">+ Add</button>
+          <button class="btn btn-ghost btn-sm" onclick="showAddRule('${svcId}')">+ Add Rule</button>
         </div>
-        <div id="svc-rules-${svcId}">
-          ${state.rules.length
-              ? state.rules.map((r, i) => ruleRow(svcId, r, i)).join('')
-              : '<p style="color:var(--muted);font-size:.75rem">No rules yet.</p>'}
-        </div>
-      </div>
-
-      <div id="svc-add-form-${svcId}"></div>
-    </div>`;
-}
-
-function ioRow(svcId, kind, item, idx) {
-  const badge = kind === 'input'
-    ? '<span class="badge input" style="font-size:.6rem">IN</span>'
-    : '<span class="badge output" style="font-size:.6rem">OUT</span>';
-
-  const deviceName = item.deviceName ? `<span style="color:var(--muted);font-size:.7rem">${item.deviceName}</span>` : '';
-  const pinLabel   = item.pinLabel   ? `<code style="font-size:.7rem">${item.pinLabel}</code>` : '';
-  const compName   = `<strong>${item.name || item.component || item.pinLabel}</strong>`;
-  const typeTag    = item.dataType   ? `<span style="color:var(--muted);font-size:.7rem">${item.dataType}</span>` : '';
-
-  let liveOrSend = '';
-  if (kind === 'input') {
-    // Live value display — updated by pollSvcLive
-    liveOrSend = `<span class="live-val" id="svc-live-${item.deviceId}-${item.pinLabel}" style="min-width:40px">—</span>`;
-  } else {
-    // Output send control based on dataType
-    const dt = (item.dataType || 'string').toLowerCase();
-    if (dt === 'boolean') {
-      liveOrSend = `
-        <button class="btn btn-ghost btn-sm" onclick="sendActuator('${item.deviceId}','${item.pinLabel}',1)">ON</button>
-        <button class="btn btn-ghost btn-sm" onclick="sendActuator('${item.deviceId}','${item.pinLabel}',0)">OFF</button>`;
-    } else if (dt === 'number') {
-      liveOrSend = `
-        <input id="out-val-${svcId}-${idx}" type="number" style="width:72px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:3px 6px;font-size:.78rem" placeholder="0" />
-        <button class="btn btn-primary btn-sm" onclick="sendActuatorInput('${item.deviceId}','${item.pinLabel}','${svcId}',${idx},'number')">Send</button>`;
-    } else {
-      liveOrSend = `
-        <input id="out-val-${svcId}-${idx}" type="text" style="width:80px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:3px 6px;font-size:.78rem" placeholder="value" />
-        <button class="btn btn-primary btn-sm" onclick="sendActuatorInput('${item.deviceId}','${item.pinLabel}','${svcId}',${idx},'string')">Send</button>`;
-    }
-  }
-
-  return `<div class="rule-row">
-    ${badge} ${compName} ${pinLabel} ${deviceName} ${typeTag}
-    <span style="margin-left:auto;display:flex;align-items:center;gap:6px">${liveOrSend}</span>
-    <span class="rule-del" onclick="removeIO('${svcId}','${kind}',${idx})">✕</span>
-  </div>`;
-}
-
-async function sendActuator(deviceId, pin, value) {
-  try { await api('POST', `/robot/${deviceId}/actuator`, { pin, value }); toast(`${pin} = ${value}`); }
-  catch(e) { toast(`Error: ${e.message}`, false); }
-}
-async function sendActuatorInput(deviceId, pin, svcId, idx, dataType) {
-  const el = document.getElementById(`out-val-${svcId}-${idx}`);
-  if (!el) return;
-  const raw   = el.value.trim();
-  const value = dataType === 'number' ? Number(raw) : raw;
-  await sendActuator(deviceId, pin, value);
-}
-
-async function pollSvcLive(svcId) {
-  const state = loadServiceState(svcId);
-  for (const inp of state.inputs) {
-    if (!inp.deviceId || !inp.pinLabel) continue;
-    try {
-      const cache = await api('GET', `/robot/${inp.deviceId}/pin_state`);
-      const val   = cache[inp.pinLabel];
-      const el    = document.getElementById(`svc-live-${inp.deviceId}-${inp.pinLabel}`);
-      if (el && val !== undefined) el.textContent = String(val);
-    } catch { /* offline */ }
-  }
-}
-
-// Map a device pin to an I/O slot
-async function addIOPin(svcId, kind) {
-  const el = document.getElementById(`svc-add-form-${svcId}`);
-  el.innerHTML = '<p style="color:var(--muted);font-size:.78rem;padding:8px">Loading pins…</p>';
-
-  const allPins = await getProjectPins();
-  const filtered = allPins.filter(p =>
-    kind === 'input' ? p.direction === 'input' : p.direction === 'output'
-  );
-
-  if (!filtered.length) {
-    el.innerHTML = `<p style="color:var(--muted);font-size:.78rem;padding:8px">
-      No ${kind} pins found on project devices. Add pins in the Hardware tab first.
-    </p>`;
-    return;
-  }
-
-  const pinOpts = filtered.map(p =>
-    `<option value="${p.deviceId}|${p.label}|${p.component}|${p.deviceName}">
-      ${p.deviceName} → ${p.label} (${p.component})
-    </option>`
-  ).join('');
-
-  el.innerHTML = `
-    <div class="inline-form">
-      <div>
-        <label>Pin</label>
-        <select id="iopin-select">
-          <option value="">Select…</option>
-          ${pinOpts}
-        </select>
-      </div>
-      <div>
-        <label>Display Name</label>
-        <input id="iopin-name" placeholder="e.g. Room Temperature" />
-      </div>
-      <div>
-        <label>Data Type</label>
-        <select id="iopin-dtype">
-          <option value="number">Number</option>
-          <option value="boolean">Boolean</option>
-          <option value="string">String</option>
-        </select>
-      </div>
-      <div class="row">
-        <button class="btn btn-primary btn-sm" onclick="saveIOPin('${svcId}','${kind}')">Map</button>
-        <button class="btn btn-ghost btn-sm" onclick="document.getElementById('svc-add-form-${svcId}').innerHTML=''">Cancel</button>
+        <div id="svc-rules-${svcId}">${rulesHtml}</div>
+        <div id="svc-add-form-${svcId}"></div>
       </div>
     </div>`;
 }
 
-function saveIOPin(svcId, kind) {
-  const sel  = document.getElementById('iopin-select').value;
-  const name = document.getElementById('iopin-name').value.trim();
-  const dt   = document.getElementById('iopin-dtype').value;
-  if (!sel) { toast('Select a pin', false); return; }
-  const [deviceId, pinLabel, component, deviceName] = sel.split('|');
-
-  const state = loadServiceState(svcId);
-  const arr   = kind === 'input' ? state.inputs : state.outputs;
-  arr.push({ deviceId, pinLabel, component, deviceName, name: name || component, dataType: dt });
-  saveServiceState(svcId, state);
-  renderServiceDetail(svcId, state);
-}
-
-function ruleRow(svcId, rule, idx) {
+function ruleRow(svcId, rule, idx, allQueues) {
+  const subName = allQueues.find(q => q.topic === rule.subscribe)?.name || rule.subscribe || '—';
+  const pubName = allQueues.find(q => q.topic === rule.publish)?.name || rule.publish || '—';
+  const enabled = rule.enabled !== false;
   return `<div class="rule-row">
-    <span style="font-size:.9rem">⚙</span>
-    <span class="rule-desc">${rule.description || rule.when + ' → ' + rule.action}</span>
+    <label class="toggle" style="flex-shrink:0">
+      <input type="checkbox" ${enabled?'checked':''} onchange="toggleRule('${svcId}',${idx},this.checked)">
+      <span class="slider"></span>
+    </label>
+    <span class="rule-desc" style="flex:1;min-width:0">
+      <strong style="font-size:.78rem">${rule.name||'Rule'}</strong>
+      <span style="display:block;font-size:.7rem;color:var(--muted)">
+        SUB: <code>${subName}</code>
+        ${rule.condition ? `· if <code>${rule.condition}</code>` : ''}
+        · PUB: <code>${pubName}</code>
+      </span>
+    </span>
     <span class="rule-del" onclick="removeRule('${svcId}',${idx})">✕</span>
   </div>`;
 }
 
-
+function toggleRule(svcId, idx, enabled) {
+  const state = loadServiceState(svcId);
+  if (state.rules[idx]) state.rules[idx].enabled = enabled;
+  saveServiceState(svcId, state);
+}
 
 function removeIO(svcId, kind, idx) {
   const state = loadServiceState(svcId);
@@ -1069,29 +974,71 @@ function removeIO(svcId, kind, idx) {
   renderServiceDetail(svcId, state);
 }
 
-function addRule(svcId) {
-  const el = document.getElementById(`svc-add-form-${svcId}`);
-  el.innerHTML = `
-    <div class="inline-form">
-      <div><label>When (condition)</label><input id="rule-when" placeholder='e.g. temperature > 30' /></div>
-      <div><label>Then (action)</label><input id="rule-then" placeholder='e.g. turn on relay_1' /></div>
-      <div><label>Description</label><input id="rule-desc-in" placeholder="Optional label" /></div>
-      <div class="row">
-        <button class="btn btn-primary btn-sm" onclick="saveRule('${svcId}')">Add</button>
-        <button class="btn btn-ghost btn-sm" onclick="document.getElementById('svc-add-form-${svcId}').innerHTML=''">Cancel</button>
+function showAddRule(svcId) {
+  const allQueues = getProjectQueues(_activeProjId || '');
+  const pubQueues = allQueues.filter(q => q.topicType === 'publish' || q.topicType === 'both');
+  const subQueues = allQueues.filter(q => q.topicType === 'subscribe' || q.topicType === 'both');
+  const pubOpts   = pubQueues.map(q => `<option value="${q.topic}">${q.name} (${q.topic})</option>`).join('');
+  const subOpts   = subQueues.map(q => `<option value="${q.topic}">${q.name} (${q.topic})</option>`).join('');
+
+  openModal('Add Rule', `
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div>
+        <label style="font-size:.72rem;color:var(--muted);display:block;margin-bottom:3px">Rule Name</label>
+        <input id="rl-name" placeholder="e.g. High Temp Alert"
+          style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:6px 10px;font-size:.82rem;width:100%" />
       </div>
-    </div>`;
-  document.getElementById('rule-when').focus();
+      <div>
+        <label style="font-size:.72rem;color:var(--muted);display:block;margin-bottom:3px">Subscribe Queue (data source)</label>
+        <select id="rl-sub" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:6px 10px;font-size:.82rem;width:100%">
+          <option value="">— select or type below —</option>
+          ${pubOpts}
+        </select>
+        <input id="rl-sub-manual" placeholder="or type topic manually" style="margin-top:4px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:5px 8px;font-size:.78rem;width:100%" />
+      </div>
+      <div>
+        <label style="font-size:.72rem;color:var(--muted);display:block;margin-bottom:3px">Condition (JS expression, optional)</label>
+        <input id="rl-cond" placeholder="e.g. data.temperature > 30"
+          style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:6px 10px;font-size:.82rem;width:100%;font-family:monospace" />
+        <p style="font-size:.7rem;color:var(--muted);margin-top:3px">Leave empty to always trigger. <code>data</code> is the incoming message.</p>
+      </div>
+      <div>
+        <label style="font-size:.72rem;color:var(--muted);display:block;margin-bottom:3px">Publish Queue (command target)</label>
+        <select id="rl-pub" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:6px 10px;font-size:.82rem;width:100%">
+          <option value="">— select or type below —</option>
+          ${subOpts}
+        </select>
+        <input id="rl-pub-manual" placeholder="or type topic manually" style="margin-top:4px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:5px 8px;font-size:.78rem;width:100%" />
+      </div>
+      <div>
+        <label style="font-size:.72rem;color:var(--muted);display:block;margin-bottom:3px">Payload (JS expression)</label>
+        <textarea id="rl-payload" placeholder="e.g. ({ relay: 1 })" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:6px 10px;font-size:.78rem;width:100%;height:60px;font-family:monospace;resize:vertical"></textarea>
+        <p style="font-size:.7rem;color:var(--muted);margin-top:3px">JS expression. <code>data</code> is available. Result is published.</p>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-primary" onclick="saveRule('${svcId}')">Add Rule</button>
+        <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      </div>
+    </div>`);
 }
 
 function saveRule(svcId) {
-  const when = document.getElementById('rule-when').value.trim();
-  const then = document.getElementById('rule-then').value.trim();
-  const desc = document.getElementById('rule-desc-in').value.trim();
-  if (!when || !then) { toast('When and Then required', false); return; }
+  const name      = document.getElementById('rl-name')?.value.trim();
+  const subSel    = document.getElementById('rl-sub')?.value;
+  const subManual = document.getElementById('rl-sub-manual')?.value.trim();
+  const condition = document.getElementById('rl-cond')?.value.trim();
+  const pubSel    = document.getElementById('rl-pub')?.value;
+  const pubManual = document.getElementById('rl-pub-manual')?.value.trim();
+  const payload   = document.getElementById('rl-payload')?.value.trim();
+
+  const subscribe = subSel || subManual;
+  const publish   = pubSel || pubManual;
+  if (!subscribe || !publish) { toast('Subscribe and Publish queues required', false); return; }
+
   const state = loadServiceState(svcId);
-  state.rules.push({ when, action: then, description: desc });
+  state.rules.push({ name: name||'Rule', subscribe, condition, publish, payload, enabled: true });
   saveServiceState(svcId, state);
+  closeModal();
   renderServiceDetail(svcId, state);
 }
 
@@ -1167,11 +1114,13 @@ async function selectDevice(id) {
     <div class="tabs" id="tabs">
       <div class="tab active" onclick="switchTab('health')">Health</div>
       <div class="tab" onclick="switchTab('config')">Config</div>
-      <div class="tab" onclick="switchTab('hardware')">Hardware</div>
+      <div class="tab" onclick="switchTab('firmware')">Firmware</div>
+      <div class="tab" onclick="switchTab('components')">Components</div>
     </div>
-    <div id="tab-health"   class="tab-content active"></div>
-    <div id="tab-config"   class="tab-content"></div>
-    <div id="tab-hardware" class="tab-content"></div>
+    <div id="tab-health"     class="tab-content active"></div>
+    <div id="tab-config"     class="tab-content"></div>
+    <div id="tab-firmware"   class="tab-content"></div>
+    <div id="tab-components" class="tab-content"></div>
   `;
 
   const [d, pins] = await Promise.all([
@@ -1182,11 +1131,12 @@ async function selectDevice(id) {
 
   renderHealth(d);
   renderConfig(id, d);
+  renderFirmware(id, d);
   renderHardware(id, pins);
 }
 
 function switchTab(name) {
-  const names = ['health','config','hardware'];
+  const names = ['health','config','firmware','components'];
   document.querySelectorAll('.tab').forEach((t,i) => t.classList.toggle('active', names[i]===name));
   document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
   document.getElementById('tab-'+name).classList.add('active');
@@ -1222,7 +1172,6 @@ function renderHealth(d) {
 
 // ── Tab: Config ────────────────────────────────────────────────────────────
 function renderConfig(deviceId, device) {
-
   document.getElementById('tab-config').innerHTML = `
     <div class="card">
       <h3>Device Identity</h3>
@@ -1244,17 +1193,20 @@ function renderConfig(deviceId, device) {
         <button class="btn btn-primary btn-sm" style="align-self:flex-start" onclick="saveDeviceIdentity('${deviceId}')">Save</button>
       </div>
     </div>
+  `;
+}
 
-    <div class="card" id="ota-check-card-${deviceId}">
-      <h3 style="display:flex;align-items:center;justify-content:space-between">
-        OTA Firmware
-        <button class="btn btn-ghost btn-sm" onclick="checkOTA('${deviceId}','${device.deviceType}')">Check for Updates</button>
-      </h3>
-      <div id="ota-status-${deviceId}">
-        <p style="font-size:.82rem;color:var(--muted)">
-          Current: <strong>v${device.firmwareVersion}</strong> &nbsp;·&nbsp;
-          Click "Check for Updates" to compare with Pocket.
-        </p>
+function renderFirmware(deviceId, device) {
+  document.getElementById('tab-firmware').innerHTML = `
+    <div class="card">
+      <h3>Firmware</h3>
+      <table style="margin-bottom:12px">
+        <tr><th>Current Version</th><td><strong>v${device.firmwareVersion}</strong></td></tr>
+        <tr><th>Device Type</th><td><code>${device.deviceType}</code></td></tr>
+      </table>
+      <button class="btn btn-ghost btn-sm" onclick="checkOTA('${deviceId}','${device.deviceType}')">Check for Updates</button>
+      <div id="ota-status-${deviceId}" style="margin-top:10px">
+        <p style="font-size:.82rem;color:var(--muted)">Click "Check for Updates" to compare with Pocket.</p>
       </div>
     </div>
   `;
@@ -1337,6 +1289,10 @@ function compDir(gpins) {
   return 'structural';
 }
 
+function compCfgKey(deviceId, component) { return `comp_cfg_${deviceId}_${encodeURIComponent(component)}`; }
+function getCompCfg(deviceId, component)  { return JSON.parse(localStorage.getItem(compCfgKey(deviceId, component)) || 'null') || {}; }
+function setCompCfg(deviceId, component, cfg) { localStorage.setItem(compCfgKey(deviceId, component), JSON.stringify(cfg)); }
+
 function renderHardware(deviceId, pins) {
   const groups = {};
   for (const p of pins) {
@@ -1349,102 +1305,149 @@ function renderHardware(deviceId, pins) {
   const dirClasses = { input:'input', output:'output', mixed:'', structural:'' };
 
   const cardsHtml = Object.entries(groups).map(([component, gpins]) => {
-    const dir  = compDir(gpins);
-    const pins = gpins.map(p => `<code>${p.pin}</code>`).join(' ');
+    const dir    = compDir(gpins);
+    const pnHtml = gpins.map(p => `<code>${p.pin}</code>`).join(' ');
     const activeQ = gpins.find(p => getQueue(deviceId, p.label));
-    const qBadge  = activeQ ? `<span style="font-size:.68rem;color:var(--accent)">⟳ ${getQueue(deviceId, activeQ.label)?.topic}</span>` : '';
-    return `<div class="comp-card" onclick="openComponentDetail('${deviceId}','${encodeURIComponent(component)}')">
+    const qBadge  = activeQ ? `<span style="font-size:.68rem;color:var(--accent)">⟳</span>` : '';
+    const cfg     = getCompCfg(deviceId, component);
+    const typeBadge = cfg.type ? `<span style="font-size:.68rem;color:var(--muted)">${cfg.type}</span>` : '';
+    return `<div class="comp-card" onclick="openComponentInline('${deviceId}','${encodeURIComponent(component)}')">
       <div class="cname">${component}</div>
       <div class="cmeta">
         <span class="badge ${dirClasses[dir]}" style="${dirClasses[dir] ? '' : 'background:var(--surface2);color:var(--muted)'}">${dirLabels[dir]}</span>
-        ${pins} ${qBadge}
+        ${pnHtml} ${qBadge} ${typeBadge}
       </div>
     </div>`;
   }).join('');
 
-  document.getElementById('tab-hardware').innerHTML = `
+  document.getElementById('tab-components').innerHTML = `
     <div style="padding:4px 0 8px;display:flex;align-items:center;justify-content:space-between">
-      <span style="font-size:.72rem;color:var(--muted)">Click a component to configure pins and queue</span>
+      <span style="font-size:.72rem;color:var(--muted)">Click a component to configure</span>
       <button class="btn btn-primary btn-sm" onclick="showAddPin('${deviceId}')">+ Add Pin</button>
     </div>
     ${pins.length ? cardsHtml : '<p style="color:var(--muted);font-size:.82rem">No components registered.</p>'}
+    <div id="comp-inline-detail" style="margin-top:14px"></div>
     <div id="add-pin-form"></div>`;
 }
 
-// ── Component detail overlay ───────────────────────────────────────────────
+// ── Component detail — inline inside Hardware tab ─────────────────────────
 
-let _compDeviceId = null;
-
-function openComponentDetail(deviceId, componentEncoded) {
+function openComponentInline(deviceId, componentEncoded) {
   const component = decodeURIComponent(componentEncoded);
-  _compDeviceId   = deviceId;
   const pins = devicePins.filter(p => p.component === component);
-  renderComponentDetail(deviceId, component, pins);
-  document.getElementById('comp-detail').classList.add('open');
+  renderComponentInline(deviceId, component, pins);
 }
 
-function closeComponentDetail() {
-  document.getElementById('comp-detail').classList.remove('open');
-  _compDeviceId = null;
+function closeComponentInline() {
+  const el = document.getElementById('comp-inline-detail');
+  if (el) el.innerHTML = '';
 }
 
-function renderComponentDetail(deviceId, component, pins) {
+function renderComponentInline(deviceId, component, pins) {
   const inputPins  = pins.filter(p => p.direction === 'input');
   const outputPins = pins.filter(p => p.direction === 'output');
   const busPins    = pins.filter(p => p.direction === 'i2c' || p.direction === 'power');
+  const cfg        = getCompCfg(deviceId, component);
 
-  function pinQueueBlock(p, kind) {
+  // Project queues for dropdown
+  const projId     = allDevices.find(d => d.deviceId === deviceId)?.projectId || '';
+  const projQueues = getProjectQueues(projId);
+  const pubQueues  = projQueues.filter(q => q.topicType === 'publish' || q.topicType === 'both');
+  const subQueues  = projQueues.filter(q => q.topicType === 'subscribe' || q.topicType === 'both');
+
+  function queueSelector(p, kind) {
     const q = getQueue(deviceId, p.label);
-    const defaultTopic = kind === 'output'
-      ? `tara/device/${deviceId}/${p.label}/set`
-      : `tara/device/${deviceId}/${p.label}/state`;
+    const queues = kind === 'input' ? pubQueues : subQueues;
+    const options = [
+      `<option value="">— manual entry —</option>`,
+      ...queues.map(qq => `<option value="${qq.topic}" ${q?.topic===qq.topic?'selected':''}>${qq.name} (${qq.topic})</option>`)
+    ].join('');
+    const isManual = q && !queues.find(qq => qq.topic === q.topic);
     return `
-      <div style="margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--border)">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
-          ${dirBadge(p.direction)}
-          <strong>${p.label}</strong>
+      <div style="margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--border)">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap">
+          ${dirBadge(p.direction)} <strong>${p.label}</strong>
           <code style="font-size:.72rem">GPIO ${p.pin}</code>
           ${p.protocol ? `<span style="font-size:.72rem;color:var(--muted)">${p.protocol}</span>` : ''}
-          ${p.notes    ? `<span style="font-size:.72rem;color:var(--muted)">${p.notes}</span>` : ''}
         </div>
         <label style="font-size:.7rem;color:var(--muted);display:block;margin-bottom:4px">
-          ${kind === 'output' ? '↙ Subscribe topic (receives commands from queue)' : '↗ Publish topic (sends data to queue)'}
+          ${kind === 'input' ? '↗ Publish to queue' : '↙ Subscribe from queue'}
         </label>
+        <div style="display:flex;gap:6px;margin-bottom:4px">
+          <select id="qsel-${deviceId}-${p.label}" style="flex:1;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:5px 8px;font-size:.78rem"
+            onchange="onQueueSelectChange('${deviceId}','${p.label}')">
+            ${options}
+          </select>
+        </div>
         <div style="display:flex;gap:6px">
-          <input id="q-${deviceId}-${p.label}"
-            value="${q?.topic || ''}"
-            placeholder="${defaultTopic}"
+          <input id="q-${deviceId}-${p.label}" value="${q?.topic||''}" placeholder="or type topic manually"
             style="flex:1;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:5px 8px;font-size:.78rem" />
           <button class="btn btn-primary btn-sm" onclick="saveQueueTopic('${deviceId}','${p.label}','${component}','${kind}')">Save</button>
           ${q ? `<button class="btn btn-ghost btn-sm" onclick="clearQueueTopic('${deviceId}','${p.label}','${component}')">Clear</button>` : ''}
         </div>
-        ${q ? `<p style="font-size:.7rem;color:var(--accent);margin-top:4px">⟳ Active: <code>${q.topic}</code></p>` : ''}
+        ${q ? `<p style="font-size:.7rem;color:var(--accent);margin-top:4px">⟳ <code>${q.topic}</code></p>` : ''}
       </div>`;
   }
 
   function pinSection(title, secPins, kind) {
     if (!secPins.length) return '';
-    return `<div class="card"><h3>${title}</h3>${secPins.map(p => pinQueueBlock(p, kind)).join('')}</div>`;
+    return `<div class="card"><h3>${title}</h3>${secPins.map(p => queueSelector(p, kind)).join('')}</div>`;
   }
 
-  document.getElementById('comp-detail').innerHTML = `
-    <div style="display:flex;align-items:center;gap:10px;padding:12px 18px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--bg);z-index:5">
-      <button class="btn btn-ghost btn-sm" onclick="closeComponentDetail()">← Back</button>
-      <strong style="font-size:.95rem">${component}</strong>
+  document.getElementById('comp-inline-detail').innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <strong style="font-size:.9rem">⚙ ${component}</strong>
+      <button class="btn btn-ghost btn-sm" onclick="closeComponentInline()">✕ Close</button>
     </div>
-    <div style="padding:18px;display:flex;flex-direction:column;gap:14px">
-      ${pinSection('Input Pins — Publish Data to Queue', inputPins, 'input')}
-      ${pinSection('Output Pins — Subscribe Commands from Queue', outputPins, 'output')}
-      ${busPins.length ? `<div class="card"><h3>Bus / Power Pins</h3>
-        <table><thead><tr><th>GPIO</th><th>Label</th><th>Direction</th><th>Protocol</th></tr></thead>
-        <tbody>${busPins.map(p=>`<tr><td><code>${p.pin}</code></td><td>${p.label}</td><td>${dirBadge(p.direction)}</td><td style="color:var(--muted);font-size:.72rem">${p.protocol||'—'}</td></tr>`).join('')}
-        </tbody></table></div>` : ''}
-      <div class="card" style="border-color:var(--red)">
-        <h3 style="color:var(--red)">Danger Zone</h3>
-        <p style="font-size:.78rem;color:var(--muted);margin-bottom:10px">Remove all ${pins.length} pins of this component.</p>
-        <button class="btn btn-danger btn-sm" onclick="deleteComponent('${deviceId}','${encodeURIComponent(component)}')">Delete Component</button>
+
+    <!-- Configuration -->
+    <div class="card" style="margin-bottom:12px">
+      <h3>Configuration</h3>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <div>
+          <label style="font-size:.72rem;color:var(--muted);display:block;margin-bottom:3px">Component Type</label>
+          <input id="comp-type-${deviceId}" value="${cfg.type||''}" placeholder="e.g. temperature-sensor, relay, servo, oled"
+            style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:6px 10px;font-size:.82rem;width:100%" />
+        </div>
+        <div>
+          <label style="font-size:.72rem;color:var(--muted);display:block;margin-bottom:3px">Data Processor (JS snippet)</label>
+          <textarea id="comp-proc-${deviceId}" placeholder="// runs server-side on incoming data&#10;// return transformed value or null to discard&#10;return data.value * 0.1;"
+            style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:8px 10px;font-size:.78rem;width:100%;height:80px;font-family:monospace;resize:vertical">${cfg.processor||''}</textarea>
+        </div>
+        <button class="btn btn-primary btn-sm" style="align-self:flex-start"
+          onclick="saveCompCfg('${deviceId}','${encodeURIComponent(component)}')">Save Config</button>
       </div>
+    </div>
+
+    <!-- Pin queues -->
+    ${pinSection('Input Pins — Publish to Queue', inputPins, 'input')}
+    ${pinSection('Output Pins — Subscribe from Queue', outputPins, 'output')}
+
+    ${busPins.length ? `<div class="card"><h3>Bus / Power Pins</h3>
+      <table><thead><tr><th>GPIO</th><th>Label</th><th>Direction</th><th>Protocol</th></tr></thead>
+      <tbody>${busPins.map(p=>`<tr><td><code>${p.pin}</code></td><td>${p.label}</td><td>${dirBadge(p.direction)}</td><td style="color:var(--muted);font-size:.72rem">${p.protocol||'—'}</td></tr>`).join('')}
+      </tbody></table></div>` : ''}
+
+    <div class="card" style="border-color:var(--red);margin-top:12px">
+      <h3 style="color:var(--red)">Danger Zone</h3>
+      <p style="font-size:.78rem;color:var(--muted);margin-bottom:10px">Remove all ${pins.length} pins of this component.</p>
+      <button class="btn btn-danger btn-sm" onclick="deleteComponent('${deviceId}','${encodeURIComponent(component)}')">Delete Component</button>
     </div>`;
+}
+
+function onQueueSelectChange(deviceId, pinLabel) {
+  const sel = document.getElementById(`qsel-${deviceId}-${pinLabel}`);
+  const inp = document.getElementById(`q-${deviceId}-${pinLabel}`);
+  if (sel?.value && inp) inp.value = sel.value;
+}
+
+function saveCompCfg(deviceId, componentEncoded) {
+  const component = decodeURIComponent(componentEncoded);
+  const typeVal   = document.getElementById(`comp-type-${deviceId}`)?.value.trim();
+  const procVal   = document.getElementById(`comp-proc-${deviceId}`)?.value;
+  setCompCfg(deviceId, component, { type: typeVal, processor: procVal });
+  toast('Component config saved');
+  renderHardware(deviceId, devicePins);
 }
 
 function saveQueueTopic(deviceId, pinLabel, component, kind) {
@@ -1453,14 +1456,14 @@ function saveQueueTopic(deviceId, pinLabel, component, kind) {
   if (!topic) { toast('Topic required', false); return; }
   setQueue(deviceId, pinLabel, { topic, direction: kind });
   toast('Queue topic saved');
-  renderComponentDetail(deviceId, component, devicePins.filter(p => p.component === component));
+  renderComponentInline(deviceId, component, devicePins.filter(p => p.component === component));
   renderHardware(deviceId, devicePins);
 }
 
 function clearQueueTopic(deviceId, pinLabel, component) {
   localStorage.removeItem(queueKey(deviceId, pinLabel));
   toast('Queue cleared');
-  renderComponentDetail(deviceId, component, devicePins.filter(p => p.component === component));
+  renderComponentInline(deviceId, component, devicePins.filter(p => p.component === component));
   renderHardware(deviceId, devicePins);
 }
 
@@ -1475,7 +1478,7 @@ async function deleteComponent(deviceId, componentEncoded) {
     }
     toast(`${component} deleted`);
     devicePins = await api('GET', `/robot/${deviceId}/pins`);
-    closeComponentDetail();
+    closeComponentInline();
     renderHardware(deviceId, devicePins);
   } catch(e) { toast(`Error: ${e.message}`, false); }
 }

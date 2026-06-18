@@ -29,29 +29,17 @@ export async function robotRoutes(app: FastifyInstance) {
         }
     );
 
-    // POST /robot/:deviceId/display — send draw commands or face name
-    // If body has "face" name: resolve to cmds from DB and send inline
-    // If body has "cmds" array: forward directly
+    // POST /robot/:deviceId/display — send face name command
+    // Device looks up the face in its local cache and renders it.
     app.post<{
         Params: { deviceId: string };
-        Body:   { face?: string; cmds?: object[] };
+        Body:   { face: string };
     }>('/:deviceId/display', async (req, reply) => {
         const { deviceId } = req.params;
-        const { face, cmds } = req.body;
-
-        if (cmds) {
-            publishToRobot(deviceId, 'display', { cmds });
-            return reply.code(200).send({ ok: true });
-        }
-
-        if (face) {
-            const faceDoc = await db.face.findUnique({ where: { name: face } });
-            if (!faceDoc) return reply.code(404).send({ error: `Face '${face}' not found` });
-            publishToRobot(deviceId, 'display', { cmds: faceDoc.cmds });
-            return reply.code(200).send({ ok: true });
-        }
-
-        return reply.code(400).send({ error: 'Provide either face or cmds' });
+        const { face } = req.body;
+        if (!face) return reply.code(400).send({ error: 'face name required' });
+        publishToRobot(deviceId, 'display', { face });
+        return reply.code(200).send({ ok: true });
     });
 
     // POST /robot/:deviceId/emotion

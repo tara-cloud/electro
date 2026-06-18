@@ -30,7 +30,7 @@
     .hdr-right { margin-left:auto; display:flex; gap:8px; }
 
     /* ── 3-column layout ─────────────────────────────────────────────────── */
-    main { display:grid; grid-template-columns:180px 250px 1fr; height:calc(100vh - 50px); overflow:hidden; }
+    main { display:grid; grid-template-columns:180px 250px 1fr; height:calc(100vh - 50px); overflow:hidden; position:relative; }
 
     /* ── Shared column styles ─────────────────────────────────────────────── */
     .col { border-right:1px solid var(--border); overflow-y:auto; display:flex; flex-direction:column; }
@@ -148,9 +148,14 @@
     .svc-tag .stag-del { color:var(--muted); margin-left:4px; font-size:.75rem; cursor:pointer; }
     .svc-tag .stag-del:hover { color:var(--red); }
 
-    /* ── Service detail overlay (replaces middle panel content) ──── */
-    #svc-detail { display:none; }
-    #svc-detail.open { display:flex; flex-direction:column; }
+    /* ── Component detail overlay ──── */
+    #comp-detail { display:none; position:absolute; top:0; right:0; width:calc(100% - 180px - 250px); height:100%; background:var(--bg); z-index:20; overflow-y:auto; flex-direction:column; }
+    #comp-detail.open { display:flex; }
+    .comp-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:12px 14px; margin-bottom:8px; cursor:pointer; transition:border-color .15s; }
+    .comp-card:hover { border-color:var(--accent); }
+    .comp-card .cname { font-weight:600; font-size:.9rem; }
+    .comp-card .cmeta { display:flex; gap:8px; margin-top:5px; flex-wrap:wrap; align-items:center; }
+    .comp-card .cdesc { font-size:.72rem; color:var(--muted); margin-top:3px; }
 
     /* ── IO row ────── */
     .io-row { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
@@ -200,6 +205,9 @@
   <!-- Col 3: Device detail -->
   <div id="detail" class="empty">
     <p class="empty-msg">Select a device</p>
+  </div>
+  <!-- Component detail overlay — covers col 3 when a component is selected -->
+  <div id="comp-detail"></div>
   </div>
 </main>
 
@@ -470,11 +478,66 @@ async function getProjectPins() {
   return results;
 }
 
+function queueRow(q) {
+  return `<div class="rule-row">
+    <span style="font-size:.8rem">⟳</span>
+    <span class="rule-desc">
+      <strong>${q.pinLabel}</strong>
+      <span style="color:var(--muted);margin-left:6px;font-size:.72rem">${q.devName}</span>
+    </span>
+    <code style="font-size:.72rem;color:var(--accent)">${q.topic}</code>
+  </div>`;
+}
+
+function collectQueues(svcDevices) {
+  const inputQueues  = [];
+  const outputQueues = [];
+  const deviceIds    = new Set(svcDevices.map(d => d.deviceId));
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (!key?.startsWith('queue_')) continue;
+    const parts = key.split('_');
+    if (parts.length < 3) continue;
+    const devId    = parts[1];
+    const pinLabel = parts.slice(2).join('_');
+    if (!deviceIds.has(devId)) continue;
+    const cfg = JSON.parse(localStorage.getItem(key) || 'null');
+    if (!cfg) continue;
+    const devName = svcDevices.find(d => d.deviceId === devId)?.deviceName || devId;
+    const entry = { devId, devName, pinLabel, topic: cfg.topic };
+    if (cfg.direction === 'output') { outputQueues.push(entry); }
+    else                            { inputQueues.push(entry); }
+  }
+  return { inputQueues, outputQueues };
+}
+
+function buildQueueOverview(inputQueues, outputQueues) {
+  if (!inputQueues.length && !outputQueues.length) return '';
+  const inHtml = inputQueues.length
+    ? `<div style="margin-bottom:10px">
+         <div class="section-title" style="margin:0 0 6px">↗ Publishing (Input → Queue)</div>
+         ${inputQueues.map(queueRow).join('')}
+       </div>`
+    : '';
+  const outHtml = outputQueues.length
+    ? `<div>
+         <div class="section-title" style="margin:0 0 6px">↙ Subscribing (Queue → Output)</div>
+         ${outputQueues.map(queueRow).join('')}
+       </div>`
+    : '';
+  return `<div class="card" style="border-color:var(--accent)">
+    <h3 style="color:var(--accent)">Queue Overview</h3>
+    ${inHtml}${outHtml}
+  </div>`;
+}
+
 function renderServiceDetail(svcId, state) {
+  const { inputQueues, outputQueues } = collectQueues(_svcDevices);
+
   const el = document.getElementById('svc-detail');
   el.innerHTML = `
     <div style="padding:10px;display:flex;flex-direction:column;gap:14px">
-
+      ${buildQueueOverview(inputQueues, outputQueues)}
       <!-- Components / Inputs -->
       <div>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
@@ -921,8 +984,11 @@ async function pushOTAFromElectro(deviceId, otaReleaseId) {
 }
 
 // ── Tab: Hardware ──────────────────────────────────────────────────────────
+function queueKey(deviceId, pinLabel) { return `queue_${deviceId}_${pinLabel}`; }
+function getQueue(deviceId, pinLabel)  { return JSON.parse(localStorage.getItem(queueKey(deviceId, pinLabel)) || 'null'); }
+function setQueue(deviceId, pinLabel, cfg) { localStorage.setItem(queueKey(deviceId, pinLabel), JSON.stringify(cfg)); }
+
 function renderHardware(deviceId, pins) {
-  // Group pins by component name
   const groups = {};
   for (const p of pins) {
     const key = p.component || 'Uncategorised';
@@ -930,36 +996,148 @@ function renderHardware(deviceId, pins) {
     groups[key].push(p);
   }
 
-  const groupsHtml = Object.entries(groups).map(([component, gpins]) => `
-    <div style="margin-bottom:14px">
-      <div style="font-size:.72rem;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-bottom:6px;padding-bottom:4px;border-bottom:1px solid var(--border)">
-        ${component}
+  function compDir(gpins) {
+    const dirs = new Set(gpins.map(p => p.direction));
+    if ([...dirs].every(d => d === 'power' || d === 'i2c')) return 'structural';
+    if (dirs.has('input') && dirs.has('output')) return 'mixed';
+    if (dirs.has('output')) return 'output';
+    if (dirs.has('input'))  return 'input';
+    return 'structural';
+  }
+
+  const dirLabels = { input:'SENSOR', output:'ACTUATOR', mixed:'MIXED', structural:'BUS' };
+  const dirClasses = { input:'input', output:'output', mixed:'', structural:'' };
+
+  const cardsHtml = Object.entries(groups).map(([component, gpins]) => {
+    const dir  = compDir(gpins);
+    const pins = gpins.map(p => `<code>${p.pin}</code>`).join(' ');
+    const activeQ = gpins.find(p => getQueue(deviceId, p.label));
+    const qBadge  = activeQ ? `<span style="font-size:.68rem;color:var(--accent)">⟳ ${getQueue(deviceId, activeQ.label)?.topic}</span>` : '';
+    return `<div class="comp-card" onclick="openComponentDetail('${deviceId}','${encodeURIComponent(component)}')">
+      <div class="cname">${component}</div>
+      <div class="cmeta">
+        <span class="badge ${dirClasses[dir]}" style="${!dirClasses[dir]?'background:var(--surface2);color:var(--muted)':''}">${dirLabels[dir]}</span>
+        ${pins} ${qBadge}
       </div>
-      <table>
-        <thead><tr><th>GPIO</th><th>Label</th><th>Direction</th><th>Protocol</th><th>Live</th><th>Notes</th><th></th></tr></thead>
-        <tbody>
-          ${gpins.map(p => `<tr>
-            <td><code>${p.pin}</code></td>
-            <td><strong>${p.label}</strong></td>
-            <td>${dirBadge(p.direction)}</td>
-            <td style="color:var(--muted);font-size:.72rem">${p.protocol||'—'}</td>
-            <td><span class="live-val" id="live-${deviceId}-${p.label}">—</span></td>
-            <td style="color:var(--muted);font-size:.72rem">${p.notes||'—'}</td>
-            <td><button class="btn btn-danger btn-sm" onclick="deletePin('${deviceId}','${p.pin}')">✕</button></td>
-          </tr>`).join('')}
-        </tbody>
-      </table>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 
   document.getElementById('tab-hardware').innerHTML = `
-    <div class="card">
-      <h3 style="display:flex;align-items:center;justify-content:space-between">
-        Pin Registry
-        <button class="btn btn-primary btn-sm" onclick="showAddPin('${deviceId}')">+ Add Pin</button>
-      </h3>
-      ${pins.length ? groupsHtml : '<p style="color:var(--muted);font-size:.82rem">No pins registered.</p>'}
+    <div style="padding:4px 0 8px;display:flex;align-items:center;justify-content:space-between">
+      <span style="font-size:.72rem;color:var(--muted)">Click a component to configure pins and queue</span>
+      <button class="btn btn-primary btn-sm" onclick="showAddPin('${deviceId}')">+ Add Pin</button>
     </div>
+    ${pins.length ? cardsHtml : '<p style="color:var(--muted);font-size:.82rem">No components registered.</p>'}
     <div id="add-pin-form"></div>`;
+}
+
+// ── Component detail overlay ───────────────────────────────────────────────
+
+let _compDeviceId = null;
+
+function openComponentDetail(deviceId, componentEncoded) {
+  const component = decodeURIComponent(componentEncoded);
+  _compDeviceId   = deviceId;
+  const pins = devicePins.filter(p => p.component === component);
+  renderComponentDetail(deviceId, component, pins);
+  document.getElementById('comp-detail').classList.add('open');
+}
+
+function closeComponentDetail() {
+  document.getElementById('comp-detail').classList.remove('open');
+  _compDeviceId = null;
+}
+
+function renderComponentDetail(deviceId, component, pins) {
+  const inputPins  = pins.filter(p => p.direction === 'input');
+  const outputPins = pins.filter(p => p.direction === 'output');
+  const busPins    = pins.filter(p => p.direction === 'i2c' || p.direction === 'power');
+
+  function pinQueueBlock(p, kind) {
+    const q = getQueue(deviceId, p.label);
+    const defaultTopic = kind === 'output'
+      ? `tara/device/${deviceId}/${p.label}/set`
+      : `tara/device/${deviceId}/${p.label}/state`;
+    return `
+      <div style="margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--border)">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+          ${dirBadge(p.direction)}
+          <strong>${p.label}</strong>
+          <code style="font-size:.72rem">GPIO ${p.pin}</code>
+          ${p.protocol ? `<span style="font-size:.72rem;color:var(--muted)">${p.protocol}</span>` : ''}
+          ${p.notes    ? `<span style="font-size:.72rem;color:var(--muted)">${p.notes}</span>` : ''}
+        </div>
+        <label style="font-size:.7rem;color:var(--muted);display:block;margin-bottom:4px">
+          ${kind === 'output' ? '↙ Subscribe topic (receives commands from queue)' : '↗ Publish topic (sends data to queue)'}
+        </label>
+        <div style="display:flex;gap:6px">
+          <input id="q-${deviceId}-${p.label}"
+            value="${q?.topic || ''}"
+            placeholder="${defaultTopic}"
+            style="flex:1;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:5px 8px;font-size:.78rem" />
+          <button class="btn btn-primary btn-sm" onclick="saveQueueTopic('${deviceId}','${p.label}','${component}','${kind}')">Save</button>
+          ${q ? `<button class="btn btn-ghost btn-sm" onclick="clearQueueTopic('${deviceId}','${p.label}','${component}')">Clear</button>` : ''}
+        </div>
+        ${q ? `<p style="font-size:.7rem;color:var(--accent);margin-top:4px">⟳ Active: <code>${q.topic}</code></p>` : ''}
+      </div>`;
+  }
+
+  function pinSection(title, secPins, kind) {
+    if (!secPins.length) return '';
+    return `<div class="card"><h3>${title}</h3>${secPins.map(p => pinQueueBlock(p, kind)).join('')}</div>`;
+  }
+
+  document.getElementById('comp-detail').innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;padding:12px 18px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--bg);z-index:5">
+      <button class="btn btn-ghost btn-sm" onclick="closeComponentDetail()">← Back</button>
+      <strong style="font-size:.95rem">${component}</strong>
+    </div>
+    <div style="padding:18px;display:flex;flex-direction:column;gap:14px">
+      ${pinSection('Input Pins — Publish Data to Queue', inputPins, 'input')}
+      ${pinSection('Output Pins — Subscribe Commands from Queue', outputPins, 'output')}
+      ${busPins.length ? `<div class="card"><h3>Bus / Power Pins</h3>
+        <table><thead><tr><th>GPIO</th><th>Label</th><th>Direction</th><th>Protocol</th></tr></thead>
+        <tbody>${busPins.map(p=>`<tr><td><code>${p.pin}</code></td><td>${p.label}</td><td>${dirBadge(p.direction)}</td><td style="color:var(--muted);font-size:.72rem">${p.protocol||'—'}</td></tr>`).join('')}
+        </tbody></table></div>` : ''}
+      <div class="card" style="border-color:var(--red)">
+        <h3 style="color:var(--red)">Danger Zone</h3>
+        <p style="font-size:.78rem;color:var(--muted);margin-bottom:10px">Remove all ${pins.length} pins of this component.</p>
+        <button class="btn btn-danger btn-sm" onclick="deleteComponent('${deviceId}','${encodeURIComponent(component)}')">Delete Component</button>
+      </div>
+    </div>`;
+}
+
+function saveQueueTopic(deviceId, pinLabel, component, kind) {
+  const el = document.getElementById(`q-${deviceId}-${pinLabel}`);
+  const topic = el?.value.trim();
+  if (!topic) { toast('Topic required', false); return; }
+  setQueue(deviceId, pinLabel, { topic, direction: kind });
+  toast('Queue topic saved');
+  renderComponentDetail(deviceId, component, devicePins.filter(p => p.component === component));
+  renderHardware(deviceId, devicePins);
+}
+
+function clearQueueTopic(deviceId, pinLabel, component) {
+  localStorage.removeItem(queueKey(deviceId, pinLabel));
+  toast('Queue cleared');
+  renderComponentDetail(deviceId, component, devicePins.filter(p => p.component === component));
+  renderHardware(deviceId, devicePins);
+}
+
+async function deleteComponent(deviceId, componentEncoded) {
+  const component = decodeURIComponent(componentEncoded);
+  const pins = devicePins.filter(p => p.component === component);
+  if (!confirm(`Delete all ${pins.length} pins of "${component}"?`)) return;
+  try {
+    for (const p of pins) {
+      await api('DELETE', `/robot/${deviceId}/pins/${encodeURIComponent(p.pin)}`);
+      localStorage.removeItem(queueKey(deviceId, p.label));
+    }
+    toast(`${component} deleted`);
+    devicePins = await api('GET', `/robot/${deviceId}/pins`);
+    closeComponentDetail();
+    renderHardware(deviceId, devicePins);
+  } catch(e) { toast(`Error: ${e.message}`, false); }
 }
 function showAddPin(deviceId) {
   document.getElementById('add-pin-form').innerHTML = `

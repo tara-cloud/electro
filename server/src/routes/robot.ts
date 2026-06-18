@@ -95,4 +95,28 @@ export async function robotRoutes(app: FastifyInstance) {
         publishToRobot(deviceId, 'config', configWithFaces, 1);
         return reply.code(201).send({ version });
     });
+
+    // POST /robot/ota/broadcast?deviceType=robot — push OTA to all devices of a type
+    // Called by Pocket when an OTA release is pushed
+    app.post<{
+        Querystring: { deviceType?: string };
+        Body:        { version: string; url: string };
+    }>('/ota/broadcast', async (req, reply) => {
+        const deviceType = req.query.deviceType ?? 'robot';
+        const { version, url } = req.body;
+
+        if (!version || !url) return reply.code(400).send({ error: 'version and url required' });
+
+        // Find all registered devices of this type
+        const devices = await db.device.findMany({
+            where: { deviceType },
+            select: { deviceId: true },
+        });
+
+        for (const d of devices) {
+            publishToRobot(d.deviceId, 'ota', { version, url }, 1);
+        }
+
+        return reply.code(200).send({ pushed: devices.length, version, url });
+    });
 }

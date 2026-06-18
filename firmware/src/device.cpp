@@ -9,6 +9,8 @@
 #include "TaraCore.h"
 #include <ArduinoJson.h>
 #include <U8g2lib.h>
+#include <HTTPUpdate.h>
+#include <WiFiClient.h>
 
 // ─── Display ──────────────────────────────────────────────────────────────────
 static const int I2C_SCL = 22;
@@ -223,6 +225,53 @@ void handleSpeech(const String& json) {
 void handleOTA(const String& json) {
     JsonDocument doc;
     if (deserializeJson(doc, json) != DeserializationError::Ok) return;
-    Serial.printf("[Robot] OTA: v%s\n", (const char*)doc["version"]);
-    // TODO: esp_https_ota()
+
+    String version = doc["version"] | String("");
+    String url     = doc["url"]     | String("");
+
+    if (url.length() == 0) {
+        Serial.println("[OTA] No URL in payload");
+        return;
+    }
+
+    Serial.printf("[OTA] Starting update v%s from %s\n", version.c_str(), url.c_str());
+    tlog("OTA: v" + version);
+    tlog("Downloading...");
+
+    WiFiClient client;
+
+    // Progress callback — show % on OLED
+    httpUpdate.onProgress([](int recv, int total) {
+        if (total > 0) {
+            int pct = (recv * 100) / total;
+            static int lastPct = -1;
+            if (pct != lastPct && pct % 10 == 0) {
+                lastPct = pct;
+                // tlog is not accessible here directly, update display inline
+                Serial.printf("[OTA] %d%%\n", pct);
+            }
+        }
+    });
+
+    t_httpUpdate_return ret = httpUpdate.update(client, url);
+
+    switch (ret) {
+        case HTTP_UPDATE_FAILED:
+            Serial.printf("[OTA] Failed: %s\n", httpUpdate.getLastErrorString().c_str());
+            tlog("OTA Failed!");
+            setState(STATE_ERROR);
+            break;
+
+        case HTTP_UPDATE_NO_UPDATES:
+            Serial.println("[OTA] No update needed");
+            tlog("OTA: up to date");
+            setState(STATE_IDLE);
+            break;
+
+        case HTTP_UPDATE_OK:
+            // Device reboots automatically after this
+            Serial.println("[OTA] Success — rebooting");
+            tlog("OTA OK! Rebooting");
+            break;
+    }
 }

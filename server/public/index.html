@@ -646,13 +646,17 @@ function updateQueueField(idx, key, value) {
 
 function isExisting(existingName) { return existingName && existingName !== 'null'; }
 
+function getQueueFormEl(projId, existingName) {
+  if (isExisting(existingName)) return document.getElementById(`queue-detail-form-${existingName}`);
+  if (document.getElementById('modal-backdrop')?.classList.contains('open')) return document.getElementById('modal-body');
+  return document.getElementById(`queue-form-${projId}`);
+}
+
 function refreshQueueForm(projId, existingName) {
   const existing = isExisting(existingName)
     ? JSON.parse(localStorage.getItem(mqttqKey(projId, existingName)) || 'null')
     : null;
-  const el = isExisting(existingName)
-    ? document.getElementById(`queue-detail-form-${existingName}`)
-    : document.getElementById(`queue-form-${projId}`);
+  const el = getQueueFormEl(projId, existingName);
   if (el) el.innerHTML = buildQueueForm(projId, existing);
 }
 
